@@ -1,0 +1,17 @@
+.pio/
+build/
+cmake-build*/
+.ccls-cache/
+compile_commands.json
+*.log
+node_modules/
+dist/
+out/
+.cache/
+.idea/
+.vscode/
+*.code-workspace
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
