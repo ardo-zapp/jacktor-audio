@@ -7,10 +7,13 @@
 #include <ctime>
 #include <Arduino.h>
 
+// === Hardware polarity =======================================================
 // Jika buzzer pasif dengan transistor ke GND (aktif-LOW), set 1
 #ifndef BUZZER_ACTIVE_LOW
 #define BUZZER_ACTIVE_LOW 1
 #endif
+
+// ============================================================================
 
 struct BuzzStep {
   uint16_t freqHz;
@@ -27,7 +30,7 @@ struct BuzzPatternDef {
   bool            fatal;
 };
 
-// ------------------ Patterns ------------------
+// ------------------ Patterns -------------------------------------------------
 static const BuzzStep PATTERN_BOOT[] = {
   {880,  90, BUZZER_DUTY_DEFAULT},
   {0,    30, 0},
@@ -64,7 +67,7 @@ static const BuzzPatternDef PATTERNS[] = {
   {PATTERN_PROTECT_LONG, sizeof(PATTERN_PROTECT_LONG)/sizeof(BuzzStep), 800, "protect_long", true, true},
 };
 
-// ------------------ State ------------------
+// ------------------ State ----------------------------------------------------
 static Preferences prefs;
 static bool prefsReady = false;
 
@@ -88,12 +91,13 @@ static const char            *gLastTone       = "none";
 static uint32_t               gLastToneMs     = 0;
 static uint32_t               gMutedUntilMs   = 0;
 
-static constexpr uint32_t MIN_TONE_INTERVAL_MS = 150;
-static constexpr uint32_t QUIET_PACK_ENABLE_BIT = 1u << 16;
+static constexpr uint32_t MIN_TONE_INTERVAL_MS   = 150;
+static constexpr uint32_t QUIET_PACK_ENABLE_BIT  = 1u << 16;
+static constexpr uint32_t LEDC_MAX               = (1u << BUZZER_PWM_RES_BITS) - 1u;
 
 static inline uint32_t ms() { return millis(); }
 
-// ------------------ Prefs ------------------
+// ------------------ Prefs ----------------------------------------------------
 static void ensurePrefsLoaded() {
   if (prefsReady) return;
   prefs.begin("dev/bz", false);
@@ -121,7 +125,7 @@ static void persistQuiet()   {
   prefs.putUInt("quiet", raw);
 }
 
-// ------------------ Helpers ------------------
+// ------------------ Helpers --------------------------------------------------
 static bool quietHoursActiveNow() {
   if (!config.quietEnabled) return false;
   if (config.quietStart == config.quietEnd) return false; // 0 span
@@ -142,19 +146,19 @@ static uint16_t applyVolume(uint16_t duty) {
   if (duty == 0) return 0;
   if (config.volume >= 100) return duty;
   uint32_t scaled = (uint32_t)duty * (uint32_t)config.volume / 100u;
-  uint32_t maxv = (1u << BUZZER_PWM_RES_BITS) - 1u;
-  if (scaled > maxv) scaled = maxv;
+  if (scaled > LEDC_MAX) scaled = LEDC_MAX;
   return (uint16_t)scaled;
 }
 
+// OFF harus lewat LEDC duty, jangan digitalWrite (pin sudah diambil alih LEDC)
 static void buzzerOff() {
 #if BUZZER_ACTIVE_LOW
-  // Pastikan pin idle HIGH untuk menghilangkan “ssss” noise
-  digitalWrite(BUZZER_PIN, HIGH);
+  // Aktif-LOW: OFF = HIGH konstan → duty 100%
+  ledcWrite(BUZZER_PWM_CH, LEDC_MAX);
 #else
-  digitalWrite(BUZZER_PIN, LOW);
-#endif
+  // Aktif-HIGH: OFF = LOW konstan → duty 0%
   ledcWrite(BUZZER_PWM_CH, 0);
+#endif
 }
 
 static bool toneAllowed(const BuzzPatternDef *pat, uint32_t now) {
@@ -173,30 +177,32 @@ static void startStep(uint32_t now) {
   const BuzzStep &step = gCurrent->steps[gStepIndex];
   gStepEndMs = now + step.durationMs;
 
+  // Silent step / disabled
   if (!config.enabled || step.freqHz == 0 || step.durationMs == 0 || step.duty == 0) {
     buzzerOff(); return;
   }
 
   uint16_t duty = applyVolume(step.duty);
+  if (duty == 0) { buzzerOff(); return; }
+
   ledcSetup(BUZZER_PWM_CH, step.freqHz, BUZZER_PWM_RES_BITS);
+
 #if BUZZER_ACTIVE_LOW
-  // PWM dibalik (aktif LOW)
-  uint32_t maxv = (1u << BUZZER_PWM_RES_BITS) - 1u;
-  uint32_t invDuty = (duty > maxv ? 0 : (maxv - duty));
+  // Aktif-LOW: LOW = bunyi. Duty harus dibalik: 0 → OFF, makin besar → makin lama LOW.
+  uint32_t invDuty = (duty > LEDC_MAX) ? 0 : (LEDC_MAX - duty);
   ledcWrite(BUZZER_PWM_CH, invDuty);
-  digitalWrite(BUZZER_PIN, LOW); // aktifkan jalur PWM
 #else
   ledcWrite(BUZZER_PWM_CH, duty);
-  digitalWrite(BUZZER_PIN, HIGH);
 #endif
 }
 
-// ------------------ Public API ------------------
+// ------------------ Public API ----------------------------------------------
 void buzzerInit() {
   ensurePrefsLoaded();
   pinMode(BUZZER_PIN, OUTPUT);
   ledcSetup(BUZZER_PWM_CH, BUZZER_PWM_BASE_FREQ, BUZZER_PWM_RES_BITS);
   ledcAttachPin(BUZZER_PIN, BUZZER_PWM_CH);
+  // Pastikan idle benar: aktif-LOW → HIGH 100%, aktif-HIGH → LOW 0%
   buzzerOff();
   gCurrent = nullptr;
   gCustomActive = false;
@@ -260,30 +266,40 @@ void buzzerCustom(uint32_t freqHz, uint16_t duty, uint16_t msDur) {
   ensurePrefsLoaded();
   if (!config.enabled) return;
   if (freqHz == 0 || msDur == 0 || duty == 0) { buzzStop(); return; }
+
   uint32_t now = ms();
-  gCurrent = nullptr; gCustomActive = true; gCustomEndMs = now + msDur;
+  gCurrent = nullptr;
+  gCustomActive = true;
+  gCustomEndMs = now + msDur;
+
   uint16_t scaledDuty = applyVolume(duty);
+  if (scaledDuty == 0) { buzzerOff(); gCustomActive = false; return; }
+
   ledcSetup(BUZZER_PWM_CH, freqHz, BUZZER_PWM_RES_BITS);
 #if BUZZER_ACTIVE_LOW
-  uint32_t maxv = (1u << BUZZER_PWM_RES_BITS) - 1u;
-  uint32_t invDuty = (scaledDuty > maxv ? 0 : (maxv - scaledDuty));
+  uint32_t invDuty = (scaledDuty > LEDC_MAX) ? 0 : (LEDC_MAX - scaledDuty);
   ledcWrite(BUZZER_PWM_CH, invDuty);
-  digitalWrite(BUZZER_PIN, LOW);
 #else
   ledcWrite(BUZZER_PWM_CH, scaledDuty);
-  digitalWrite(BUZZER_PIN, HIGH);
 #endif
+
   gLastTone = "custom"; gLastToneMs = now;
 }
 
 void buzzTick(uint32_t now) {
   if (!config.enabled) { buzzerOff(); return; }
+
   if (gCustomActive) {
     if (now >= gCustomEndMs) { gCustomActive = false; buzzerOff(); }
     return;
   }
+
   if (!gCurrent) return;
-  if (gStepIndex >= gCurrent->count) { buzzerOff(); gCurrent = nullptr; return; }
+
+  if (gStepIndex >= gCurrent->count) {
+    buzzerOff(); gCurrent = nullptr; return;
+  }
+
   if (now >= gStepEndMs) {
     ++gStepIndex;
     if (gStepIndex < gCurrent->count) startStep(now);

@@ -49,6 +49,8 @@ static bool     fanBootTestDone = false;
 static bool     smpsFaultLatched = false;
 static bool     smpsCutActive    = false;
 
+static uint32_t spkProtectArmUntilMs = 0;
+
 static PowerStateListener powerListener = nullptr;
 
 static void notifyPowerChange(bool prevOn, bool nowOn, PowerChangeReason reason) {
@@ -201,127 +203,187 @@ static void smpsProtectTick() {
 void powerInit() {
   safeModeActive = stateSafeModeSoft();
 
-  // Soft-start saat cold boot
-  smpsSoftstartUntilMs = millis() + SMPS_SOFTSTART_MS;
+  const uint32_t now = millis();
 
-  // Relay
+  // ---------- SMPS soft-start ----------
+  // Selalu beri jendela soft-start di cold boot
+  powerSmpsStartSoftstart(SMPS_SOFTSTART_MS);
+  smpsCutActive     = false;
+  smpsFaultLatched  = false;
+
+  // ---------- Relay utama ----------
   pinMode(RELAY_MAIN_PIN, OUTPUT);
-  applyRelay(false);            // default OFF saat boot
-  sRelayRequested = false;
-  smpsCutActive = false;
-  smpsFaultLatched = false;
+  applyRelay(false);                // default OFF saat boot
+  sRelayRequested   = false;
 
-  // Speaker control
+  // ---------- Speaker control ----------
   pinMode(SPEAKER_POWER_SWITCH_PIN, OUTPUT);
-  pinMode(SPEAKER_SELECTOR_PIN, OUTPUT);
-
-  // Default dari NVS
+  pinMode(SPEAKER_SELECTOR_PIN,     OUTPUT);
   sSpkBig = stateSpeakerIsBig();
   sSpkPwr = safeModeActive ? false : stateSpeakerPowerOn();
-  digitalWrite(SPEAKER_SELECTOR_PIN, sSpkBig ? HIGH : LOW);
-  digitalWrite(SPEAKER_POWER_SWITCH_PIN, sSpkPwr ? HIGH : LOW);
+  digitalWrite(SPEAKER_SELECTOR_PIN,     sSpkBig ? HIGH : LOW);
+  digitalWrite(SPEAKER_POWER_SWITCH_PIN, (safeModeActive ? false : sSpkPwr) ? HIGH : LOW);
 
-  // BT
+  // ---------- Bluetooth ----------
   pinMode(BT_ENABLE_PIN, OUTPUT);
   pinMode(BT_STATUS_PIN, INPUT);
-  sBtEn = stateBtEnabled();
-  uint32_t now = ms();
-  sBtMode = (FEAT_BT_AUTOSWITCH_AUX && sBtHwOn) ? _readBtStatusActiveLow() : false;
-  btLastEnteredBtMs = sBtMode ? now : 0;
-  btLastAuxMs       = sBtMode ? 0   : now;
-  btLowSinceMs      = sBtMode ? now : 0;
+  sBtEn  = stateBtEnabled();
+  sBtHwOn = false;
+  sBtMode = false;                  // default AUX, autoswitch akan mengubah saat sBtHwOn aktif
+  btLastEnteredBtMs = 0;
+  btLastAuxMs       = now;
+  btLowSinceMs      = 0;
 
-  // PC detect
+  // ---------- PC Detect ----------
   pinMode(PC_DETECT_PIN, PC_DETECT_INPUT_PULL);
-  pcRaw = _readPcDetectActiveLow();
-  pcOn = pcRaw;
-  pcLastRawMs = now;
-  pcGraceUntilMs = now + PC_DETECT_GRACE_MS;
-  pcOffSchedAt = 0;
+  pcRaw  = _readPcDetectActiveLow();
+  pcOn   = pcRaw;
+  pcLastRawMs     = now;
+  pcGraceUntilMs  = now + PC_DETECT_GRACE_MS;
+  pcOffSchedAt    = 0;
 
-  // Speaker protector LED monitor
-  pinMode(SPK_PROTECT_LED_PIN, INPUT);
-  sSpkProtectOk = _readSpkProtectLedActiveHigh();
-  protectLastChangeMs = now;
-  protectFaultLatched = false;
+  // ---------- Speaker protector input ----------
+  pinMode(SPK_PROTECT_LED_PIN, INPUT);               // GPIO34..39: input-only, no internal pull
+  sSpkProtectOk        = _readSpkProtectLedActiveHigh();
+  protectLastChangeMs  = now;
+  protectFaultLatched  = false;
+  protectFaultLogged   = false;
 
-  // Fan PWM
-  ledcSetup(FAN_PWM_CH, FAN_PWM_FREQ, FAN_PWM_RES_BITS);
+  // ---------- Fan PWM ----------
+  ledcSetup(FAN_PWM_CH,  FAN_PWM_FREQ, FAN_PWM_RES_BITS);
   ledcAttachPin(FAN_PWM_PIN, FAN_PWM_CH);
-
-  if (FEAT_FAN_BOOT_TEST) { fanWriteDuty(FAN_BOOT_TEST_DUTY); delay(FAN_BOOT_TEST_MS); }
+  if (FEAT_FAN_BOOT_TEST) {
+    fanWriteDuty(FAN_BOOT_TEST_DUTY);
+    delay(FAN_BOOT_TEST_MS);
+  }
   fanBootTestDone = true;
   fanTick();
 
+  // ---------- Apply BT HW & safe-mode ----------
   applyBtHardware();
-
   if (safeModeActive) {
     fanWriteDuty(0);
     digitalWrite(SPEAKER_POWER_SWITCH_PIN, LOW);
     sSpkPwr = false;
+#if LOG_ENABLE
+    LOGF("[SAFE] Jacktor Audio safe-mode active\n");
+#endif
     commsLog("warn", "safe_mode");
   }
+
+  // ---------- Arming window speaker protector ----------
+  // Mulai cek protector hanya setelah: soft-start selesai + tambahan arming modul
+  spkProtectArmUntilMs = millis() + SMPS_SOFTSTART_MS + SPK_PROTECT_ARM_MS;
 }
 
 void powerTick(uint32_t now) {
-  // Fan
+  // ---------------- Fan control ----------------
   fanTick();
-  if (safeModeActive) fanWriteDuty(0);
+  if (safeModeActive) {
+    fanWriteDuty(0);
+  }
 
-  // Proteksi SMPS
+  // ---------------- SMPS protect (update status) ----------------
   smpsProtectTick();
 
-  // Speaker protector LED → latch fault
-  if (sRelayOn) {
+  // ---------------- Speaker protector monitor ----------------
+#if FEAT_SPK_PROTECT_ENABLE
+  // Boleh cek HANYA jika: power ON, soft-start selesai,
+  // - bila FEAT_SMPS_PROTECT_ENABLE=1 → SMPS sehat (tidak cut/latched)
+  // - bila FEAT_SMPS_PROTECT_ENABLE=0 → lewati syarat itu tapi tetap tunggu soft-start
+  // DAN sudah melewati arming window modul protector.
+  const bool smpsPassed =
+      sRelayOn &&
+      !powerSmpsSoftstartActive() &&
+      (FEAT_SMPS_PROTECT_ENABLE ? (!smpsCutActive && !smpsFaultLatched) : true);
+
+  const bool protectArmed = (now >= spkProtectArmUntilMs);
+
+  if (smpsPassed && protectArmed) {
+    // Speaker protector LED → latch fault jika OFF (sesuai logika active-high/low) stabil ≥ SPK_PROTECT_FAULT_MS
     bool ok = _readSpkProtectLedActiveHigh();
-    if (ok != sSpkProtectOk) { sSpkProtectOk = ok; protectLastChangeMs = now; }
-    else {
+    if (ok != sSpkProtectOk) {
+      sSpkProtectOk = ok;
+      protectLastChangeMs = now;
+    } else {
       if (!sSpkProtectOk && !protectFaultLatched) {
-        if (now - protectLastChangeMs >= SPK_PROTECT_FAULT_MS) protectFaultLatched = true;
+        if (now - protectLastChangeMs >= SPK_PROTECT_FAULT_MS) {
+          protectFaultLatched = true;
+        }
       }
-      if (sSpkProtectOk && protectFaultLatched) protectFaultLatched = false;
+      if (sSpkProtectOk && protectFaultLatched) {
+        protectFaultLatched = false;
+      }
     }
     if (protectFaultLatched != protectFaultLogged) {
       protectFaultLogged = protectFaultLatched;
-      // log via Serial jika perlu
+#if LOG_ENABLE
+      LOGF(protectFaultLatched ? "[PROTECT] speaker_fail\n" : "[PROTECT] speaker_clear\n");
+#endif
     }
   } else {
+    // Suspend monitor sebelum siap → cegah false-positive saat boot/soft-start
     protectFaultLatched = false;
     sSpkProtectOk = true;
   }
+#else
+  // Feature OFF: jangan cek/latch sama sekali
+  protectFaultLatched = false;
+  sSpkProtectOk = true;
+#endif
 
-  // BT autoswitch & auto-off
+  // ---------------- BT autoswitch & auto-off ----------------
   if (FEAT_BT_AUTOSWITCH_AUX && sBtHwOn) {
     bool lowNow = _readBtStatusActiveLow();
     if (lowNow) {
       if (!sBtMode) {
         if (btLowSinceMs == 0) btLowSinceMs = now;
         if ((now - btLowSinceMs) >= AUX_TO_BT_LOW_MS) {
-          sBtMode = true; btLastEnteredBtMs = now; btLastAuxMs = 0;
+          sBtMode = true;
+          btLastEnteredBtMs = now;
+          btLastAuxMs = 0;
         }
-      } else { if (btLastEnteredBtMs == 0) btLastEnteredBtMs = now; btLastAuxMs = 0; }
+      } else {
+        if (btLastEnteredBtMs == 0) btLastEnteredBtMs = now;
+        btLastAuxMs = 0;
+      }
     } else {
       btLowSinceMs = 0;
-      if (sBtMode) { sBtMode = false; btLastAuxMs = now; }
-      else if (btLastAuxMs == 0) btLastAuxMs = now;
-    }
-  }
-  if (sBtEn && sBtHwOn) {
-    uint32_t idleMs = stateBtAutoOffMs();
-    if (idleMs > 0 && !sBtMode && btLastAuxMs != 0) {
-      if ((now - btLastAuxMs) >= idleMs) powerSetBtEnabled(false);
+      if (sBtMode) {
+        sBtMode = false;
+        btLastAuxMs = now;
+      } else if (btLastAuxMs == 0) {
+        btLastAuxMs = now;
+      }
     }
   }
 
-  // Auto power via PC detect
+  // Auto-off modul BT bila terlalu lama di AUX
+  if (sBtEn && sBtHwOn) {
+    uint32_t idleMs = stateBtAutoOffMs();
+    if (idleMs > 0 && !sBtMode && btLastAuxMs != 0) {
+      if ((now - btLastAuxMs) >= idleMs) {
+        powerSetBtEnabled(false);
+      }
+    }
+  }
+
+  // ---------------- Auto power via PC detect ----------------
   if (FEAT_PC_DETECT_ENABLE && !sOta && !safeModeActive) {
     bool raw = _readPcDetectActiveLow();
-    if (raw != pcRaw) { pcRaw = raw; pcLastRawMs = now; }
+    if (raw != pcRaw) {
+      pcRaw = raw;
+      pcLastRawMs = now;
+    }
     if ((now - pcLastRawMs) >= PC_DETECT_DEBOUNCE_MS) {
       if (raw != pcOn) {
         pcOn = raw;
-        if (pcOn) { pcGraceUntilMs = now + PC_DETECT_GRACE_MS; powerSetMainRelay(true, PowerChangeReason::PcDetect); }
-        else      { pcOffSchedAt   = now + PC_DETECT_GRACE_MS; }
+        if (pcOn) {
+          pcGraceUntilMs = now + PC_DETECT_GRACE_MS;
+          powerSetMainRelay(true, PowerChangeReason::PcDetect);
+        } else {
+          pcOffSchedAt = now + PC_DETECT_GRACE_MS;
+        }
       }
     }
     if (!pcOn && pcOffSchedAt != 0 && now >= pcOffSchedAt && now >= pcGraceUntilMs) {
@@ -332,30 +394,47 @@ void powerTick(uint32_t now) {
     pcOffSchedAt = 0;
   }
 
+  // ---------------- Apply BT hardware state ----------------
   applyBtHardware();
 }
+
 
 // ---------------- Relay ----------------
 void powerSetMainRelay(bool on, PowerChangeReason reason) {
-  bool prevOn = sRelayOn;
-  sRelayRequested = on;
-  if (safeModeActive) on = false;
+  const bool prevOn = sRelayOn;
 
-  // Setiap transisi ke ON → mulai soft-start baru
-  if (on && !prevOn) {
-    smpsCutActive = false;
-    smpsFaultLatched = false;
-    smpsSoftstartUntilMs = millis() + SMPS_SOFTSTART_MS;
+  sRelayRequested = on;
+  if (safeModeActive) {
+    on = false;
   }
 
-  if (!on) { smpsCutActive = false; smpsFaultLatched = false; }
+  if (!on) {
+    // Saat mematikan: bersihkan status SMPS & protector
+    smpsCutActive = false;
+    smpsFaultLatched = false;
+    protectFaultLatched = false;
+    sSpkProtectOk = true;
+  }
 
   applyRelay(on);
-  bool nowOn = sRelayOn;
-  if (on && FEAT_PC_DETECT_ENABLE) pcGraceUntilMs = ms() + PC_DETECT_GRACE_MS;
+  const bool nowOn = sRelayOn;
+
+  if (on && !prevOn) {
+    // Set ulang soft-start & arming protector setiap kali power ON
+    powerSmpsStartSoftstart(SMPS_SOFTSTART_MS);
+    smpsCutActive     = false;
+    smpsFaultLatched  = false;
+    spkProtectArmUntilMs = millis() + SMPS_SOFTSTART_MS + SPK_PROTECT_ARM_MS;
+
+#if FEAT_PC_DETECT_ENABLE
+    pcGraceUntilMs = millis() + PC_DETECT_GRACE_MS;
+#endif
+  }
+
   applyBtHardware();
   notifyPowerChange(prevOn, nowOn, reason);
 }
+
 bool powerMainRelay() { return sRelayOn; }
 
 void powerRegisterStateListener(PowerStateListener listener) { powerListener = listener; }
@@ -407,10 +486,28 @@ void powerSetOtaActive(bool on) {
 
 // ---------------- Protector Fault ----------------
 bool powerSpkProtectFault() {
-  // Jangan pernah melaporkan fault protector kalau power OFF / SMPS belum sehat
-  if (!powerIsOn() || powerSmpsSoftstartActive() || powerSmpsTripLatched()) {
+  // Matikan total dari config
+#if !FEAT_SPK_PROTECT_ENABLE
+  return false;
+#endif
+
+  // Jangan pernah melaporkan fault sebelum semua syarat lolos
+  if (!sRelayOn) {
     return false;
   }
+  if (powerSmpsSoftstartActive()) {
+    return false;
+  }
+#if FEAT_SMPS_PROTECT_ENABLE
+  if (smpsCutActive || smpsFaultLatched) {
+    return false;
+  }
+#endif
+  // Wajib tunggu arming window modul protector
+  if (millis() < spkProtectArmUntilMs) {
+    return false;
+  }
+
   return protectFaultLatched;
 }
 

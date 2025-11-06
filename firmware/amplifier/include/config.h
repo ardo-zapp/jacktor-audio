@@ -24,7 +24,7 @@
 
 //  Firmware meta
 // ============================================================================
-#define FW_NAME                  "Jacktor Audio Amplifier Firmware"
+#define FW_NAME                  "Jacktor Audio"
 #define FW_VERSION               "amp-1.0.0"
 
 
@@ -39,6 +39,7 @@
 #define FEAT_RTC_TEMP_TELEMETRY      1   // kirim rtc_c di telemetri
 #define FEAT_RTC_SYNC_POLICY         1   // offset>2s + rate-limit 24h
 #define FEAT_SMPS_PROTECT_ENABLE     0
+#define FEAT_SPK_PROTECT_ENABLE      0
 #define FEAT_FILTER_DS18B20_SOFT     0   // filter software opsional
 
 #define ANALYZER_WS_ENABLE            1
@@ -61,7 +62,7 @@
 #define BTN_POWER_ACTIVE_LOW         1
 #define BT_STATUS_ACTIVE_LOW         1
 
-#define UI_BOOT_HOLD_MS              900
+#define UI_BOOT_HOLD_MS              3000
 #define PC_DETECT_GRACE_MS           2500
 #define PC_DETECT_DEBOUNCE_MS        80
 #define AUX_TO_BT_LOW_MS             3000
@@ -249,8 +250,12 @@
 //  - Fault jika LED padam terus ≥ SPK_PROTECT_FAULT_MS
 // ============================================================================
 #define SPK_PROTECT_LED_PIN      39
-#define SPK_PROTECT_ACTIVE_HIGH  1      // LED ON = normal
 #define SPK_PROTECT_FAULT_MS     1500
+#define SPK_PROTECT_LED_PIN      39
+#define SPK_PROTECT_ACTIVE_HIGH  1      // LED ON = normal (ganti ke 0 kalau opto menarik LOW=OK)
+#define SPK_PROTECT_FAULT_MS     1500
+// Tambahan waktu "arming" setelah soft-start SMPS agar modul speaker protector benar-benar siap.
+#define SPK_PROTECT_ARM_MS       2000
 
 
 // ============================================================================
