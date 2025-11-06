@@ -2,6 +2,8 @@
 
 Jacktor Audio adalah ekosistem amplifier pintar berbasis ESP32 lengkap dengan panel bridge, aplikasi desktop (Electron), serta aplikasi Android (Compose) untuk kontrol dan telemetri. Repositori ini menampung seluruh komponen tersebut dalam satu monorepo.
 
+> ESP-32 DEVKITC V4 WROOM-32U
+
 ## Struktur Repository
 
 ```
@@ -36,12 +38,6 @@ Masing-masing subdirektori memiliki README yang mendokumentasikan GPIO, fitur, d
 - Selama OTA panel berlangsung, mesin OTG serta bridge UART dipause sehingga update tidak terganggu.
 - OTA amplifier dijembatani panel tanpa kebutuhan jalur RX0/TX0 fisik; semua update rilis dilakukan via panel atau USB langsung pada perangkat amplifier.
 - Panel bridge tidak lagi memegang pin EN/GPIO0 amplifier; pembaruan firmware sepenuhnya dilakukan via OTA.
-
-## Dokumentasi Lanjutan
-
-- `firmware/amplifier/README.md` — Fitur lengkap Jacktor Audio Amplifier, skema telemetri (termasuk `rtc_c` dan blok `features{}`), kebijakan OTA & RTC, serta langkah update.
-- `firmware/bridge/README.md` — Mapping GPIO final Jacktor Audio Panel Bridge, state machine OTG adaptif, fallback power, handshake, perintah CLI panel, dan instruksi OTA panel.
-- `panel/desktop/README.md` & `panel/android/README.md` — Roadmap UI, dependensi build, dan spesifikasi CLI→JSON.
 
 ## PlatformIO + CLion Quick Setup (AUTO)
 
@@ -96,3 +92,9 @@ Antarmuka panel (desktop & Android) mengusung tata letak **landscape** dengan gr
 - **Factory Reset** dipindahkan ke halaman Settings dan membutuhkan PIN 4–6 digit (konfirmasi dua kali).
 - **Tone Lab** menyediakan preset Simple, Sequence, Musical, dan Randomizer untuk hiburan saat demo.
 - **Sinkronisasi data** memakai pola digest/etag (`nv_digest?` → `nv_get`/`nv_set`). NVS menjadi sumber kebenaran; aplikasi hanya menyimpan cache dan otomatis pulih setelah instal ulang.
+
+## Dokumentasi Lanjutan
+
+- `firmware/amplifier/README.md` — Fitur lengkap Jacktor Audio Amplifier, skema telemetri (termasuk `rtc_c` dan blok `features{}`), kebijakan OTA & RTC, serta langkah update.
+- `firmware/bridge/README.md` — Mapping GPIO final Jacktor Audio Panel Bridge, state machine OTG adaptif, fallback power, handshake, perintah CLI panel, dan instruksi OTA panel.
+- `panel/desktop/README.md` & `panel/android/README.md` — Roadmap UI, dependensi build, dan spesifikasi CLI→JSON.
