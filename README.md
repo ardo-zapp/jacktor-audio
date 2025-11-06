@@ -76,7 +76,7 @@ Script akan otomatis memindai semua subfolder di dalam `--firmware-root` yang be
 1. Buka **CLion**.  
 2. Pastikan plugin **“PlatformIO for CLion”** telah diinstal dan diaktifkan:  
    - `File → Settings → Plugins → Marketplace → cari "PlatformIO for CLion" → Install`.  
-3. Atur path PlatformIO:
+3. Atur path PlatformIO (opsional, biasanya deteksi otomatis):
    - `File → Settings → Languages & Frameworks → PlatformIO`.  
    - Isi kolom **PlatformIO Core Executable** dengan path yang ditampilkan oleh script (misalnya `/home/ardo/.local/bin/pio` atau `tools/piow`).
 4. Buka proyek langsung dari folder yang berisi `platformio.ini` (mis. `firmware/amplifier` atau `firmware/bridge`).
