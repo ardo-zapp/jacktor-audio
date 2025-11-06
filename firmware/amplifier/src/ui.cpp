@@ -177,17 +177,17 @@ void uiTick(uint32_t now) {
   // Transisi scene berdasar power state:
   if (powerIsStandby() && gScene != UiScene::STANDBY) {
     gScene = UiScene::STANDBY;
-  } else if (powerIsOn() && gScene == UiScene::STANDBY) {
+  } else if (powerIsOn() && (gScene == UiScene::STANDBY || gScene == UiScene::SPLASH)) {
     gScene = UiScene::RUN;
   }
 
   switch (gScene) {
-    case UiScene::SPLASH:   /* keep */ break; // hanya by call eksplisit
-    case UiScene::BOOTLOG:  u8g2.sendBuffer(); break; // baris ditulis per event
-    case UiScene::STANDBY:  drawStandbyScreen(); break;
-    case UiScene::RUN:      drawRunScreen(); break;
-    case UiScene::ERROR:    /* static */ break;
-    case UiScene::WARN:     /* static */ break;
+  case UiScene::SPLASH:   /* keep */ break; // hanya by call eksplisit
+  case UiScene::BOOTLOG:  u8g2.sendBuffer(); break; // baris ditulis per event
+  case UiScene::STANDBY:  drawStandbyScreen(); break;
+  case UiScene::RUN:      drawRunScreen(); break;
+  case UiScene::ERROR:    /* static */ break;
+  case UiScene::WARN:     /* static */ break;
   }
 }
 
