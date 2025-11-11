@@ -32,14 +32,13 @@
 //  Diagnostic feature toggles & global policy
 // ============================================================================
 #define FEAT_PC_DETECT_ENABLE        1   // 1=auto-power via PC detect aktif default
-#define FEAT_BT_ENABLE_AT_BOOT       0   // 0=BT default OFF saat boot
 #define FEAT_BT_AUTOSWITCH_AUX       1   // 1=atur AUX↔BT (LOW≥3s dst)
 #define FEAT_FAN_BOOT_TEST           1
 #define FEAT_FACTORY_RESET_COMBO     1
 #define FEAT_RTC_TEMP_TELEMETRY      1   // kirim rtc_c di telemetri
 #define FEAT_RTC_SYNC_POLICY         1   // offset>2s + rate-limit 24h
-#define FEAT_SMPS_PROTECT_ENABLE     0
-#define FEAT_SPK_PROTECT_ENABLE      0
+#define FEAT_SMPS_PROTECT_ENABLE     1
+#define FEAT_SPK_PROTECT_ENABLE      1
 #define FEAT_FILTER_DS18B20_SOFT     0   // filter software opsional
 
 #define ANALYZER_WS_ENABLE            1
@@ -81,12 +80,8 @@
 #define SERIAL_BAUD_LINK         115200      // UART2 ke Panel (telemetri & command)
 
 // Logging UART internal (Serial) -- default aktif
-#ifndef LOG_ENABLE
 #define LOG_ENABLE               1
-#endif
-#ifndef LOG_BAUD
 #define LOG_BAUD                 SERIAL_BAUD_USB
-#endif
 
 // UART2 (ke Panel)
 #define UART2_RX_PIN             16
@@ -155,7 +150,7 @@
 // ============================================================================
 #define SMPS_CUTOFF_V            SMPS_CUT_V
 #define SMPS_RECOVERY_V          SMPS_REC_V
-#define SMPS_SOFTSTART_MS        5000
+#define SMPS_SOFTSTART_MS        1000
 #define SMPS_PROTECT_BYPASS      (!FEAT_SMPS_PROTECT_ENABLE)
 
 
@@ -174,12 +169,11 @@
 
 // ============================================================================
 //  Relay & Speaker control
-//  - RELAY utama default OFF di boot dingin
-//  - SPEAKER_POWER_SWITCH_PIN dipindah ke pin bekas Voltmeter Switch (sesuai keputusan)
+//  - RELAY utama default OFF di cold boot
 //  - SPEAKER_SELECTOR_PIN: HIGH=BIG, LOW=SMALL
 // ============================================================================
 #define RELAY_MAIN_PIN           14
-#define RELAY_MAIN_ACTIVE_HIGH   0
+#define RELAY_MAIN_ACTIVE_HIGH   1
 
 #define SPEAKER_POWER_SWITCH_PIN 25
 #define SPEAKER_SELECTOR_PIN     26
@@ -202,8 +196,8 @@
 
 // Mode default & custom duty
 // 0=AUTO, 1=CUSTOM, 2=FAILSAFE
-#define FAN_DEFAULT_MODE         0
-#define FAN_CUSTOM_DUTY          640    // dipakai jika mode CUSTOM
+#define FAN_DEFAULT_MODE         1
+#define FAN_CUSTOM_DUTY          1023    // dipakai jika mode CUSTOM
 
 // Kurva AUTO (titik suhu → duty)
 // Duty 0..1023; atur sesuai karakter kipas & heatsink

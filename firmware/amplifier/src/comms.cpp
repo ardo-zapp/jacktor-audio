@@ -134,7 +134,6 @@ static void writeNvsSnapshot(JsonObject root) {
 static void writeFeatures(JsonObject root) {
   JsonObject feats = root["features"].to<JsonObject>();
   feats["pc_detect"]        = static_cast<bool>(FEAT_PC_DETECT_ENABLE);
-  feats["bt_boot_on"]       = static_cast<bool>(FEAT_BT_ENABLE_AT_BOOT);
   feats["bt_autoswitch"]    = static_cast<bool>(FEAT_BT_AUTOSWITCH_AUX);
   feats["fan_boot_test"]    = static_cast<bool>(FEAT_FAN_BOOT_TEST);
   feats["factory_reset_combo"] = static_cast<bool>(FEAT_FACTORY_RESET_COMBO);

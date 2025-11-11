@@ -48,7 +48,7 @@ static void loadFromNvs() {
   sSmpsCutV    = nv.getFloat (K_SMPS_CUT,    SMPS_CUT_V);
   sSmpsRecV    = nv.getFloat (K_SMPS_REC,    SMPS_REC_V);
 
-  sBtEn        = nv.getBool  (K_BT_EN,   FEAT_BT_ENABLE_AT_BOOT != 0);
+  sBtEn        = nv.getBool  (K_BT_EN,   true);
   sBtOffMs     = nv.getULong (K_BT_OFFMS, BT_AUTO_OFF_IDLE_MS);
 
   sRtcSyncTs   = nv.getULong (K_RTC_SYNC, 0);

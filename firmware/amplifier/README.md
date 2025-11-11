@@ -68,7 +68,7 @@ Kedua jalur berikut menghapus seluruh NVS, menampilkan pesan pada OLED, membunyi
 | GPIO | Fungsi | Catatan |
 |-----:|--------|---------|
 | 2 | UART activity LED | Indikasi TX/RX UART2 |
-| 4 | Bluetooth enable | Auto-off 5 menit idle/AUX; default mengikuti `FEAT_BT_ENABLE_AT_BOOT` |
+| 4 | Bluetooth enable | Auto-off 5 menit idle/AUX |
 | 5 / 19 / 18 | Tombol Play / Prev / Next | Kontrol modul Bluetooth |
 | 13 | Tombol Power (`BTN_POWER_PIN`) | Aktif LOW, debounced; dipakai combo factory reset |
 | 14 | Relay utama | OFF default saat boot |
@@ -187,7 +187,6 @@ Contoh frame `hz1`:
 Semua sakelar diagnostik tersedia di `include/config.h` sehingga perilaku firmware dapat diubah tanpa menyentuh modul lain.
 
 - `FEAT_PC_DETECT_ENABLE` — aktifkan otomatis ON/OFF berbasis sinyal PC detect.
-- `FEAT_BT_ENABLE_AT_BOOT` — tentukan apakah modul BT menyala otomatis saat boot.
 - `FEAT_BT_AUTOSWITCH_AUX` — izinkan pindah AUX↔BT ketika level AUX menahan LOW ≥3 s.
 - `FEAT_FAN_BOOT_TEST` — jalankan self-test kipas beberapa ratus milidetik saat boot.
 - `FEAT_FACTORY_RESET_COMBO` — kombinasikan BTN_POWER + BOOT di startup untuk factory reset.
