@@ -126,7 +126,7 @@ static void fanWriteDuty(uint16_t duty) {
 // - tLow..tHigh: linear dutyMin → dutyMax
 // - t >= tHigh : dutyMax
 static uint16_t fanCurveAuto(float tC) {
-  constexpr uint16_t dutyMin = 400;
+  constexpr uint16_t dutyMin = 250;
   constexpr uint16_t dutyMax = 1023;
 
   if (isnan(tC)) {
