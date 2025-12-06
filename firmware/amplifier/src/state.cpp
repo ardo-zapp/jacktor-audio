@@ -39,7 +39,7 @@ static constexpr const char* K_RTC_SYNC       = "rtc_sync";
 
 static void loadFromNvs() {
   sSpeakerBig  = nv.getBool  (K_SPK_BIG,  SPK_DEFAULT_BIG);
-  sSpeakerPwr  = nv.getBool  (K_SPK_PWR,  false);
+  sSpeakerPwr  = nv.getBool  (K_SPK_PWR,  true);
 
   sFanMode     = (FanMode) nv.getUChar (K_FAN_MODE, (uint8_t)FanMode::AUTO);
   sFanDuty     = nv.getUShort(K_FAN_DUTY, FAN_CUSTOM_DUTY);

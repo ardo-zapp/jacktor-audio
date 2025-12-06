@@ -11,6 +11,7 @@ void uiTick(uint32_t now);
 void uiShowSplash(const char* title);                // splash awal
 void uiBootLogLine(const char* label, bool ok);      // baris boot log: OK/FAIL
 void uiShowError(const char* msg);                   // layar error penuh
+void uiClearErrorToRun();
 void uiShowWarning(const char* msg);                 // layar warning/info
 void uiShowStandby();                                // paksa ke layar standby
 void uiShowBoot(uint32_t holdMs);                    // splash boot bawaan

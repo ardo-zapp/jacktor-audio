@@ -45,12 +45,6 @@ static inline void drawHeader(const char* title) {
   u8g2.drawHLine(0, 12, 128);
 }
 
-static inline void drawKeyVal(int y, const char* k, const char* v) {
-  u8g2.setFont(u8g2_font_6x12_tf);
-  u8g2.drawStr(0, y, k);
-  u8g2.drawStr(70, y, v);
-}
-
 static void drawStandbyScreen() {
   u8g2.clearBuffer();
   drawHeader("STANDBY");
@@ -170,24 +164,32 @@ void uiShowFactoryReset(const char* subtitle, uint32_t holdMs) {
 }
 
 void uiTick(uint32_t now) {
-  // 30 FPS max agar hemat
+  // 30 FPS max
   if (now - lastDrawMs < 33) return;
   lastDrawMs = now;
 
-  // Transisi scene berdasar power state:
-  if (powerIsStandby() && gScene != UiScene::STANDBY) {
-    gScene = UiScene::STANDBY;
-  } else if (powerIsOn() && (gScene == UiScene::STANDBY || gScene == UiScene::SPLASH)) {
+  const bool standby = powerIsStandby();
+  const bool on      = powerIsOn();
+
+  // Transisi scene berdasar power state
+  if (standby) {
+    // Jangan timpa WARN/ERROR, biarkan dialog atau error tetap tampil
+    if (gScene != UiScene::STANDBY &&
+        gScene != UiScene::WARN &&
+        gScene != UiScene::ERROR) {
+      gScene = UiScene::STANDBY;
+        }
+  } else if (on && (gScene == UiScene::STANDBY || gScene == UiScene::SPLASH)) {
     gScene = UiScene::RUN;
   }
 
   switch (gScene) {
-  case UiScene::SPLASH:   /* keep */ break; // hanya by call eksplisit
-  case UiScene::BOOTLOG:  u8g2.sendBuffer(); break; // baris ditulis per event
-  case UiScene::STANDBY:  drawStandbyScreen(); break;
-  case UiScene::RUN:      drawRunScreen(); break;
-  case UiScene::ERROR:    /* static */ break;
-  case UiScene::WARN:     /* static */ break;
+  case UiScene::SPLASH:   /* no-op */ break;
+  case UiScene::BOOTLOG:  u8g2.sendBuffer();      break;
+  case UiScene::STANDBY:  drawStandbyScreen();    break;
+  case UiScene::RUN:      drawRunScreen();        break;
+  case UiScene::ERROR:    /* static error view */ break;
+  case UiScene::WARN:     /* static warn view  */ break;
   }
 }
 
@@ -214,6 +216,12 @@ void uiShowError(const char* msg) {
 void uiShowWarning(const char* msg) {
   gScene = UiScene::WARN;
   drawWarning(msg);
+}
+
+void uiClearErrorToRun() {
+  if (gScene == UiScene::ERROR || gScene == UiScene::WARN) {
+    gScene = UiScene::RUN;
+  }
 }
 
 void uiShowStandby() {

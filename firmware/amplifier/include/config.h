@@ -47,7 +47,7 @@
 #define ANALYZER_UPDATE_MS            33
 #define ANALYZER_MIN_UPDATE_MS        16
 #define ANALYZER_MAX_UPDATE_MS        100
-#define WS_NOISE_THRESHOLD            1000
+#define WS_NOISE_THRESHOLD            0
 #define WS_GAIN_DAMPEN                2
 
 #define TELEM_REALTIME_ENABLE         1
@@ -59,13 +59,11 @@
 #define BTN_POWER_PIN                13      // tombol power utama (input), aktif LOW
 #define BTN_BOOT_PIN                 0
 #define BTN_POWER_ACTIVE_LOW         1
-#define BT_STATUS_ACTIVE_LOW         1
+#define BT_STATUS_ACTIVE_LOW         0
 
 #define UI_BOOT_HOLD_MS              3000
 #define PC_DETECT_GRACE_MS           2500
 #define PC_DETECT_DEBOUNCE_MS        80
-#define AUX_TO_BT_LOW_MS             3000
-#define FAN_BOOT_TEST_MS             800
 #define BT_AUTO_OFF_IDLE_MS          300000
 
 #define SMPS_CUT_V                   50.0f
@@ -95,7 +93,7 @@
 //  Tombol fisik
 // ============================================================================
 #define BTN_POWER_INPUT_MODE     INPUT_PULLUP
-#define BTN_FACTORY_RESET_HOLD_MS 1000
+#define BTN_FACTORY_RESET_HOLD_MS 5000
 #define BTN_POWER_DEBOUNCE_MS     80
 
 
@@ -138,8 +136,7 @@
 #define R2_OHMS                  10030.0f   // ADS1115 divider lower resistor (ohms)
 
 // Bawah ambang ini dianggap “tidak ada daya” (noise floor)
-// (0.10 V dipilih agar tidak terkunci 0.0V namun tetap menolak noise)
-#define VOLT_MIN_VALID_V         0.10f
+#define VOLT_MIN_VALID_V         0.0f
 
 
 // ============================================================================
@@ -150,7 +147,7 @@
 // ============================================================================
 #define SMPS_CUTOFF_V            SMPS_CUT_V
 #define SMPS_RECOVERY_V          SMPS_REC_V
-#define SMPS_SOFTSTART_MS        1000
+#define SMPS_SOFTSTART_MS        500
 #define SMPS_PROTECT_BYPASS      (!FEAT_SMPS_PROTECT_ENABLE)
 
 
@@ -164,7 +161,14 @@
 #define BT_ENABLE_PIN            4
 #define BT_STATUS_PIN            23
 #define BT_AUTO_OFF_MS           BT_AUTO_OFF_IDLE_MS
-#define BT_AUX_TO_BT_LOW_MS      AUX_TO_BT_LOW_MS
+#define BT_AUX_TO_BT_LOW_MS      3000
+#define AUX_TO_BT_LOW_MS         1000
+#define BT_TO_AUX_LOSS_MS        3
+#define BT_BTN_PLAY_PIN          5
+#define BT_BTN_PREV_PIN          19
+#define BT_BTN_NEXT_PIN          18
+#define FEAT_BT_BUTTONS_ENABLE   1
+#define BT_BTN_PULSE_MS          100
 
 
 // ============================================================================
@@ -191,12 +195,12 @@
 #define FAN_PWM_RES_BITS         10     // Duty 0..1023
 
 // Boot test kipas (opsional)
-#define FAN_BOOT_TEST_MS         800
-#define FAN_BOOT_TEST_DUTY       900    // 0..1023
+#define FAN_BOOT_TEST_MS         3000
+#define FAN_BOOT_TEST_DUTY       1023    // 0..1023
 
 // Mode default & custom duty
 // 0=AUTO, 1=CUSTOM, 2=FAILSAFE
-#define FAN_DEFAULT_MODE         1
+#define FAN_DEFAULT_MODE         0
 #define FAN_CUSTOM_DUTY          1023    // dipakai jika mode CUSTOM
 
 // Kurva AUTO (titik suhu → duty)
@@ -204,7 +208,7 @@
 #define FAN_AUTO_T1_C            40.0f
 #define FAN_AUTO_T2_C            60.0f
 #define FAN_AUTO_T3_C            80.0f
-#define FAN_AUTO_D1              200
+#define FAN_AUTO_D1              400
 #define FAN_AUTO_D2              650
 #define FAN_AUTO_D3              1023
 
@@ -246,10 +250,9 @@
 #define SPK_PROTECT_LED_PIN      39
 #define SPK_PROTECT_FAULT_MS     1500
 #define SPK_PROTECT_LED_PIN      39
-#define SPK_PROTECT_ACTIVE_HIGH  1      // LED ON = normal (ganti ke 0 kalau opto menarik LOW=OK)
+#define SPK_PROTECT_ACTIVE_HIGH  0
 #define SPK_PROTECT_FAULT_MS     1500
-// Tambahan waktu "arming" setelah soft-start SMPS agar modul speaker protector benar-benar siap.
-#define SPK_PROTECT_ARM_MS       2000
+#define SPK_PROTECT_ARM_MS       5000
 
 
 // ============================================================================

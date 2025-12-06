@@ -1,5 +1,6 @@
 #include <HardwareSerial.h>
 HardwareSerial espSerial(2);
+
 #include "main.h"
 #include "config.h"
 
@@ -23,51 +24,57 @@ HardwareSerial espSerial(2);
 
 static bool gPowerInitDone = false;
 
-// Grace window supaya nada SHUTDOWN tidak dipotong saat masuk standby
+// Jeda agar nada SHUTDOWN selesai saat masuk standby
 static uint32_t gStandbyBuzzAllowUntilMs = 0;
 
 static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReason reason);
 
-static uint8_t relayOffLevel() { return RELAY_MAIN_ACTIVE_HIGH ? LOW : HIGH; }
+static uint8_t relayOffLevel() {
+  return RELAY_MAIN_ACTIVE_HIGH ? LOW : HIGH;
+}
 
 static void ensureMainRelayOffRaw() {
   pinMode(RELAY_MAIN_PIN, OUTPUT);
   digitalWrite(RELAY_MAIN_PIN, relayOffLevel());
 }
+
 static inline void ensureSpeakerPinsOffRaw() {
-  pinMode(SPEAKER_POWER_SWITCH_PIN, OUTPUT); digitalWrite(SPEAKER_POWER_SWITCH_PIN, LOW);
-  pinMode(SPEAKER_SELECTOR_PIN,      OUTPUT); digitalWrite(SPEAKER_SELECTOR_PIN,      LOW);
+  pinMode(SPEAKER_POWER_SWITCH_PIN, OUTPUT);
+  digitalWrite(SPEAKER_POWER_SWITCH_PIN, LOW);
+  pinMode(SPEAKER_SELECTOR_PIN, OUTPUT);
+  digitalWrite(SPEAKER_SELECTOR_PIN, LOW);
 }
 
-static const char *powerReasonToStr(PowerChangeReason reason) {
+static const char* powerReasonToStr(PowerChangeReason reason) {
   switch (reason) {
-    case PowerChangeReason::Button: return "button";
-    case PowerChangeReason::Command: return "command";
-    case PowerChangeReason::PcDetect: return "pc_detect";
+    case PowerChangeReason::Button:       return "button";
+    case PowerChangeReason::Command:      return "command";
+    case PowerChangeReason::PcDetect:     return "pc_detect";
     case PowerChangeReason::FactoryReset: return "factory_reset";
-    default: return "unknown";
+    default:                              return "unknown";
   }
 }
 
 static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReason reason) {
   if (prev == now) return;
+
 #if LOG_ENABLE
-  const char *prevStr = prev == PowerState::On ? "on" : "standby";
-  const char *nowStr  = now == PowerState::On ? "on" : "standby";
+  const char* prevStr = (prev == PowerState::On) ? "on" : "standby";
+  const char* nowStr  = (now  == PowerState::On) ? "on" : "standby";
   LOGF("[POWER] %s -> %s (%s)\n", prevStr, nowStr, powerReasonToStr(reason));
 #endif
 
   if (now == PowerState::On) {
-    // Pa stikan nada BOOT selalu keluar (preempt pattern lama)
+    // Transisi ke ON: tampilkan boot screen + nada boot
     uiShowBoot(UI_BOOT_HOLD_MS);
-    powerSmpsStartSoftstart(SMPS_SOFTSTART_MS);   // soft-start SMPS tiap ON
-    buzzStop();                                   // hentikan pattern lama (ERROR/PROTECT_LONG)
+    powerSmpsStartSoftstart(SMPS_SOFTSTART_MS);
+    buzzStop();
     buzzPattern(BuzzPatternId::BOOT);
   } else {
-    // Turun ke Standby (termasuk akibat proteksi): paksa nada SHUTDOWN
-    buzzStop();                                   // preempt supaya shutdown terdengar
+    // Transisi ke standby (termasuk karena proteksi)
+    buzzStop();
     buzzPattern(BuzzPatternId::SHUTDOWN);
-    gStandbyBuzzAllowUntilMs = millis() + 450;    // beri waktu nada selesai
+    gStandbyBuzzAllowUntilMs = millis() + 450;
   }
 }
 
@@ -85,32 +92,26 @@ void appPerformFactoryReset(const char* subtitle, const char* src) {
   playFactoryResetTone();
   stateFactoryReset();
   buzzerFactoryReset();
-  if (gPowerInitDone) powerSetMainRelay(false, PowerChangeReason::FactoryReset);
-  else ensureMainRelayOffRaw();
+
+  if (gPowerInitDone) {
+    powerSetMainRelay(false, PowerChangeReason::FactoryReset);
+  } else {
+    ensureMainRelayOffRaw();
+  }
+
   commsLogFactoryReset(src);
   delay(1500);
   ESP.restart();
-  while (true) { delay(100); }
 }
 
 static bool isPowerButtonPressed() {
   const int val = digitalRead(BTN_POWER_PIN);
-  if (BTN_POWER_ACTIVE_LOW) return val == LOW;
-  return val == HIGH;
+  return val == LOW;
 }
 
-static void checkManualFactoryResetCombo() {
-#if FEAT_FACTORY_RESET_COMBO
-  delay(50);
-  if (digitalRead(BTN_BOOT_PIN) == LOW && isPowerButtonPressed()) {
-    const uint32_t start = millis();
-    while (millis() - start < BTN_FACTORY_RESET_HOLD_MS) {
-      if (digitalRead(BTN_BOOT_PIN) != LOW || !isPowerButtonPressed()) return;
-      delay(10);
-    }
-    appPerformFactoryReset("FACTORY RESET", "manual");
-  }
-#endif
+static bool isBootButtonPressed() {
+  const int val = digitalRead(BTN_BOOT_PIN);
+  return val == LOW;
 }
 
 // ---- Init -------------------------------------------------------------------
@@ -127,7 +128,7 @@ void appInit() {
   ensureSpeakerPinsOffRaw();
 
 #if FEAT_FACTORY_RESET_COMBO
-  pinMode(BTN_BOOT_PIN, INPUT_PULLUP);
+  pinMode(BTN_BOOT_PIN,  INPUT_PULLUP);
   pinMode(BTN_POWER_PIN, BTN_POWER_INPUT_MODE);
 #endif
 
@@ -137,13 +138,12 @@ void appInit() {
   powerRegisterStateListener(onPowerStateChanged);
   commsInit();
   uiInit();
-  checkManualFactoryResetCombo();
 
-  sensorsInit();     // ADS1115, DS18B20, RTC, Analyzer (I2S)
-  powerInit();       // relay default OFF; fan PWM ready
+  sensorsInit();   // ADS1115, DS18B20, RTC, Analyzer (I2S)
+  powerInit();     // relay default OFF; fan PWM ready
   gPowerInitDone = true;
 
-  // Cold boot → langsung standby (tanpa splash)
+  // Cold boot → langsung standby
   uiShowStandby();
 
 #if OTA_ENABLE
@@ -166,22 +166,78 @@ void appTick() {
   static uint32_t lastWarnBuzzMs   = 0;
   static uint32_t smpsFaultSinceMs = 0;
 
-  // Debounce tombol
+  // Debounce tombol power
   static bool btnInit = false, btnStable = false, btnReported = false;
   static uint32_t btnLastChange = 0;
 
   const uint32_t now = millis();
 
-  // 1) Service
+  // 1) Service layer
   sensorsTick(now);
   powerTick(now);
 
   bool powerOn = powerIsOn();
 
+#if FEAT_FACTORY_RESET_COMBO
+  // Manual factory reset:
+  // 1) Harus standby
+  // 2) Tekan & tahan BOOT >= BTN_FACTORY_RESET_HOLD_MS
+  // 3) OLED tampil konfirmasi
+  // 4) Lepas BOOT, tekan lagi untuk eksekusi
+  static bool     frDialogActive  = false;
+  static bool     frAwaitRepress  = false;
+  static uint32_t frHoldStart     = 0;
+  static bool     frBootPrev      = false;
+
+  const bool bootNow = isBootButtonPressed();
+
+  if (!powerOn) {
+    if (!frDialogActive) {
+      // Deteksi long-press awal
+      if (bootNow && !frBootPrev) {
+        frHoldStart = now;
+      }
+      if (bootNow && (now - frHoldStart >= BTN_FACTORY_RESET_HOLD_MS)) {
+        uiShowFactoryReset("Lepas & tekan BOOT lagi", 0);
+        frDialogActive = true;
+        frAwaitRepress = false;
+      }
+    } else {
+      // Dialog sudah tampil
+      if (!frAwaitRepress) {
+        // Menunggu BOOT dilepas
+        if (!bootNow && frBootPrev) {
+          frAwaitRepress = true;
+        }
+      } else {
+        // Menunggu BOOT ditekan ulang untuk konfirmasi
+        if (bootNow && !frBootPrev) {
+          appPerformFactoryReset("FACTORY RESET", "boot_btn");
+          // Tidak kembali (ESP.restart)
+        }
+      }
+    }
+  } else {
+    // Jika user menyalakan power di tengah proses, reset state FR
+    frDialogActive = false;
+    frAwaitRepress = false;
+  }
+
+  frBootPrev = bootNow;
+#endif
+
   // Debounce tombol power fisik
   const bool rawBtn = isPowerButtonPressed();
-  if (!btnInit) { btnStable = rawBtn; btnReported = rawBtn; btnLastChange = now; btnInit = true; }
-  if (rawBtn != btnStable) { btnStable = rawBtn; btnLastChange = now; }
+  if (!btnInit) {
+    btnStable     = rawBtn;
+    btnReported   = rawBtn;
+    btnLastChange = now;
+    btnInit       = true;
+  }
+  if (rawBtn != btnStable) {
+    btnStable     = rawBtn;
+    btnLastChange = now;
+  }
   if (now - btnLastChange >= BTN_POWER_DEBOUNCE_MS) {
     if (btnStable != btnReported) {
       btnReported = btnStable;
@@ -193,7 +249,7 @@ void appTick() {
     }
   }
 
-  // Analyzer ON hanya saat power ON
+  // Analyzer hanya aktif saat power ON
   const bool analyzerShouldRun = powerOn;
   if (analyzerShouldRun != lastAnalyzerEnabled) {
     sensorsSetAnalyzerEnabled(analyzerShouldRun);
@@ -201,23 +257,20 @@ void appTick() {
   }
 
   // === Fault evaluation ===
-  const bool protectFault = powerSpkProtectFault();
-  const bool smpsBypass   = stateSmpsBypass();
-  const float voltage     = getVoltageInstant();
-  const bool inSoftstart  = powerSmpsSoftstartActive();
-
-  const uint32_t ERROR_RETRIGGER_MS = 2000;
-  const uint32_t WARN_RETRIGGER_MS  = 1500;
+  const bool  protectFault = powerSpkProtectFault();
+  const bool  smpsBypass   = stateSmpsBypass();
+  const float voltage      = getVoltageInstant();
+  const bool  inSoftstart  = powerSmpsSoftstartActive();
 
   if (powerOn) {
     const bool smpsNoPower = (!smpsBypass && voltage == 0.0f);
     const bool smpsLowVolt = (!smpsBypass && voltage > 0.0f && voltage < stateSmpsCutoffV());
     const bool smpsFault   = (!inSoftstart) && (smpsNoPower || smpsLowVolt);
 
-    const bool warnNow     = isnan(getHeatsinkC());
+    const bool     warnNow = isnan(getHeatsinkC());
     const uint32_t nowMs   = now;
 
-    // Speaker Protector FAIL → nada panjang looping
+    // Speaker protector fault
     if (protectFault && !lastSpkFault) {
       uiShowError("SPEAKER PROTECT");
       buzzStop();
@@ -227,14 +280,19 @@ void appTick() {
     if (!protectFault && lastSpkFault) {
       buzzStop();
       lastSpkFault = false;
+      uiClearErrorToRun();
     }
 
-    // SMPS soft-start: jangan panik dulu
+    // SMPS soft-start: jangan evaluasi fault
     if (inSoftstart) {
-      if (lastSmpsFault) { buzzStop(); lastSmpsFault = false; }
+      if (lastSmpsFault) {
+        buzzStop();
+        lastSmpsFault = false;
+      }
       smpsFaultSinceMs = 0;
     } else if (smpsFault && !lastSmpsFault) {
-      // SMPS PROTECT → ERROR singkat + auto-shutdown 10s
+      constexpr uint32_t ERROR_RETRIGGER_MS = 2000;
+      // SMPS PROTECT → error singkat + auto-shutdown setelah 10 s
       smpsFaultSinceMs = nowMs;
       uiShowError("SMPS PROTECT");
       if (nowMs - lastFatalBuzzMs >= ERROR_RETRIGGER_MS) {
@@ -244,27 +302,35 @@ void appTick() {
       }
       lastSmpsFault = true;
     } else if (smpsFault && lastSmpsFault) {
-      if (nowMs - smpsFaultSinceMs > 1000) buzzStop(); // jangan jadi panjang
-      if (nowMs - smpsFaultSinceMs >= 10000) powerSetMainRelay(false, PowerChangeReason::Command);
-    }
-    if (!smpsFault && lastSmpsFault && !inSoftstart) {
-      buzzStop(); lastSmpsFault = false; smpsFaultSinceMs = 0;
+      if (nowMs - smpsFaultSinceMs > 1000) {
+        buzzStop();
+      }
+      if (nowMs - smpsFaultSinceMs >= 10000) {
+        powerSetMainRelay(false, PowerChangeReason::Command);
+      }
     }
 
-    // Notice ringan
+    if (!smpsFault && lastSmpsFault && !inSoftstart) {
+      buzzStop();
+      lastSmpsFault     = false;
+      smpsFaultSinceMs  = 0;
+    }
+
+    // Warning ringan (mis. suhu belum terbaca)
     if (!protectFault && !smpsFault && warnNow) {
+      constexpr uint32_t WARN_RETRIGGER_MS = 1500;
       if (nowMs - lastWarnBuzzMs >= WARN_RETRIGGER_MS) {
         buzzPattern(BuzzPatternId::WARNING);
         lastWarnBuzzMs = nowMs;
       }
     }
   } else {
-    // STANDBY: beri grace untuk nada shutdown, lalu diam & reset
+    // Standby: beri waktu nada shutdown, lalu reset status fault
     if (now >= gStandbyBuzzAllowUntilMs) {
       buzzStop();
-      lastSpkFault = false;
-      lastSmpsFault = false;
-      smpsFaultSinceMs = 0;
+      lastSpkFault      = false;
+      lastSmpsFault     = false;
+      smpsFaultSinceMs  = 0;
     }
   }
 
@@ -276,7 +342,7 @@ void appTick() {
   otaTick(now);
 #endif
 
-  // Update UI context info + nada ganti input
+  // Update status input + nada pindah input
   uiSetInputStatus(powerBtMode(), powerGetSpeakerSelectBig());
   if (powerOn && !(lastSpkFault || lastSmpsFault)) {
     const bool btMode = powerBtMode();
@@ -287,16 +353,21 @@ void appTick() {
   } else {
     lastBtMode = powerBtMode();
   }
+
+  // RTC → update clock dan tanggal di UI
   if (sqw) {
     char iso[20];
-    if (sensorsGetTimeISO(iso, sizeof(iso)) && strlen(iso) >= 19) {
-      uiSetClock(&iso[11]);   // HH:MM:SS
-      uiSetDate(iso);         // yyyy-mm-dd
+    if (sensorsGetTimeISO(iso, sizeof(iso)) && std::strlen(iso) >= 19) {
+      uiSetClock(&iso[11]);  // HH:MM:SS
+      uiSetDate(iso);        // yyyy-mm-dd
     }
   }
 
   // 3) UI kecil
-  if (now - lastUi >= 33) { lastUi = now; uiTick(now); }
+  if (now - lastUi >= 33) {
+    lastUi = now;
+    uiTick(now);
+  }
 
   // 4) Buzzer & NVS
   buzzTick(now);
