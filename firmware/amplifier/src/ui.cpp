@@ -145,12 +145,6 @@ void uiTick(uint32_t now) {
   if (now - lastDrawMs < 33) return;
   lastDrawMs = now;
 
-  const bool standby = powerIsStandby();
-
-  if (standby && scene != UiScene::STANDBY && scene != UiScene::WARN && scene != UiScene::ERROR) {
-    scene = UiScene::STANDBY;
-  }
-
   switch (scene) {
     case UiScene::SPLASH: break;
     case UiScene::BOOTLOG: u8g2.sendBuffer(); break;
@@ -198,8 +192,10 @@ void uiShowStandby() {
 }
 
 void uiForceStandby() {
-  scene = UiScene::STANDBY;
-  drawStandbyScreen();
+  if (scene != UiScene::STANDBY) {
+    scene = UiScene::STANDBY;
+    drawStandbyScreen();
+  }
 }
 
 void uiTransitionToRun() {

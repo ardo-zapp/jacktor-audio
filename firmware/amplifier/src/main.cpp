@@ -23,6 +23,7 @@ HardwareSerial espSerial(2);
 
 static bool powerInitDone = false;
 static uint32_t standbyBuzzAllowUntil = 0;
+static bool bootTonePlayed = false;
 
 static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReason reason);
 
@@ -64,13 +65,14 @@ static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReas
   if (now == PowerState::On) {
     uiShowBoot(UI_BOOT_HOLD_MS);
     powerSmpsStartSoftstart(SMPS_SOFTSTART_MS);
-    buzzStop();
-    buzzPattern(BuzzPatternId::BOOT);
+    bootTonePlayed = false;
   } else {
+    LOGF("[UI] Force standby from callback\n");
     uiForceStandby();
     buzzStop();
     buzzPattern(BuzzPatternId::SHUTDOWN);
     standbyBuzzAllowUntil = millis() + 450;
+    bootTonePlayed = false;
   }
 }
 
@@ -132,6 +134,7 @@ void appInit() {
   sensorsInit();
   powerInit();
   powerInitDone = true;
+  bootTonePlayed = false;
   uiShowStandby();
 
 #if OTA_ENABLE
@@ -158,6 +161,7 @@ void appTick() {
   powerTick(now);
 
   bool powerOn = powerIsOn();
+  bool powerStandby = powerIsStandby();
   bool smpsValid = powerSmpsIsValid();
 
 #if FEAT_FACTORY_RESET_COMBO
@@ -208,6 +212,7 @@ void appTick() {
         powerSetMainRelay(!powerOn, PowerChangeReason::Button);
         buzzerClick();
         powerOn = powerIsOn();
+        powerStandby = powerIsStandby();
       }
     }
   }
@@ -249,12 +254,14 @@ void appTick() {
       buzzStop();
       buzzPattern(BuzzPatternId::SMPS_ERROR);
       lastSmpsFault = true;
+      LOGF("[SMPS] Error detected, showing UI\n");
     }
 
     if (!smpsFault && lastSmpsFault && !inSoftstart) {
       buzzStop();
       lastSmpsFault = false;
       if (!uiIsErrorActive()) uiClearErrorToRun();
+      LOGF("[SMPS] Error cleared\n");
     }
 
     if (!protectFault && !smpsFault && warnNow) {
@@ -264,8 +271,15 @@ void appTick() {
       }
     }
 
-    if (smpsValid && !uiIsErrorActive()) {
-      uiTransitionToRun();
+    if (smpsValid) {
+      if (!bootTonePlayed) {
+        buzzPattern(BuzzPatternId::BOOT);
+        bootTonePlayed = true;
+        LOGF("[BOOT] SMPS valid, playing boot tone\n");
+      }
+      if (!uiIsErrorActive()) {
+        uiTransitionToRun();
+      }
     }
   } else {
     if (now >= standbyBuzzAllowUntil) {
@@ -273,6 +287,15 @@ void appTick() {
       lastSpkFault = false;
       lastSmpsFault = false;
     }
+  }
+
+  if (powerStandby) {
+    static uint32_t lastStandbyLog = 0;
+    if (now - lastStandbyLog > 1000) {
+      LOGF("[MAIN] powerStandby=true, forcing UI standby\n");
+      lastStandbyLog = now;
+    }
+    uiForceStandby();
   }
 
   const bool sqw = sensorsSqwConsumeTick();
