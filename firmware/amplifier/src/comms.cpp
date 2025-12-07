@@ -19,7 +19,8 @@
 #include <vector>
 
 extern HardwareSerial espSerial;
-static HardwareSerial &linkSerial = espSerial;
+static HardwareSerial &linkSerial = espSerial;  // UART2 (RX16/TX17)
+static HardwareSerial &usbSerial = Serial;       // USB Serial (native)
 
 static String rxLine;
 static uint32_t lastRxBlink = 0, lastTxBlink = 0;
@@ -34,11 +35,27 @@ static inline void ledActivityTick(uint32_t now) {
   if (now - lastRxBlink > 60 && now - lastTxBlink > 60) digitalWrite(LED_UART_PIN, LOW);
 }
 
+// Send JSON document to BOTH USB Serial and UART2
 template <typename TDoc>
 static void sendDoc(const TDoc &doc) {
   String out;
   serializeJson(doc, out);
+  
+  // Send to UART2 (Panel)
   linkSerial.println(out);
+  
+  // Send to USB Serial (USB port for debugging/monitoring)
+  usbSerial.println(out);
+  
+  ledTxPulse();
+}
+
+// Send to specific serial only (for selective output)
+template <typename TDoc>
+static void sendDocTo(HardwareSerial &serial, const TDoc &doc) {
+  String out;
+  serializeJson(doc, out);
+  serial.println(out);
   ledTxPulse();
 }
 
@@ -211,7 +228,7 @@ static void sendRealtimeTelemetry(uint32_t now) {
   rt["input"] = powerInputModeStr();
   rt["bt_state"] = powerBtMode() ? "bt" : "aux";
 
-  sendDoc(root);
+  sendDoc(root);  // Broadcast to BOTH USB and UART2
 }
 
 static void sendAnalyzerSnapshot(const char *evt) {
@@ -231,7 +248,7 @@ static void sendAnalyzerSnapshot(const char *evt) {
     const uint8_t *bands = analyzerGetBands();
     for (uint8_t i = 0; i < bandsLen; ++i) arr.add(static_cast<uint16_t>(bands[i]));
   }
-  sendDoc(root);
+  sendDoc(root);  // Broadcast to BOTH USB and UART2
 }
 
 static void sendSlowTelemetry(uint32_t now) {
@@ -279,7 +296,7 @@ static void sendSlowTelemetry(uint32_t now) {
   writeNvsSnapshot(data);
   writeFeatures(data);
 
-  sendDoc(root);
+  sendDoc(root);  // Broadcast to BOTH USB and UART2
 }
 
 static void playAckTone() {
@@ -778,7 +795,12 @@ void commsInit() {
   pinMode(LED_UART_PIN, OUTPUT);
   digitalWrite(LED_UART_PIN, LOW);
 
+  // Initialize USB Serial (native CDC)
+  usbSerial.begin(SERIAL_BAUD_USB);
+  
+  // Initialize UART2 (Panel communication)
   linkSerial.begin(SERIAL_BAUD_LINK, SERIAL_8N1, UART2_RX_PIN, UART2_TX_PIN);
+  
   rxLine.reserve(4096);
   lastRtMs = 0;
   lastHz1Ms = 0;
@@ -789,6 +811,7 @@ void commsInit() {
 void commsTick(uint32_t now, bool sqwTick) {
   ledActivityTick(now);
 
+  // Read from UART2 (Panel) - primary command source
   while (linkSerial.available()) {
     int c = linkSerial.read();
     if (c < 0) break;
@@ -804,7 +827,25 @@ void commsTick(uint32_t now, bool sqwTick) {
       else rxLine = "";
     }
   }
+  
+  // Also read from USB Serial (for debugging/testing)
+  while (usbSerial.available()) {
+    int c = usbSerial.read();
+    if (c < 0) break;
+    ledRxPulse();
 
+    if (c == '\n' || c == '\r') {
+      if (rxLine.length() > 0) {
+        handleJsonLine(rxLine);
+        rxLine = "";
+      }
+    } else {
+      if (rxLine.length() < 4000) rxLine += (char)c;
+      else rxLine = "";
+    }
+  }
+
+  // Send realtime telemetry (if system ON)
   if (TELEM_REALTIME_ENABLE && powerIsOn()) {
     uint32_t intervalRt = (TELEM_HZ_REALTIME > 0) ? (1000UL / TELEM_HZ_REALTIME) : 0;
     if (intervalRt == 0 || now - lastRtMs >= intervalRt) {
@@ -813,6 +854,7 @@ void commsTick(uint32_t now, bool sqwTick) {
     }
   }
 
+  // Send slow telemetry
   bool shouldSendSlow = forceTel;
   uint32_t slowInterval = (TELEM_SLOW_HZ > 0) ? (1000UL / TELEM_SLOW_HZ) : 0;
   if (!shouldSendSlow) {
