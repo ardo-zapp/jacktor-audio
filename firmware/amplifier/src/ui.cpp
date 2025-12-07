@@ -37,10 +37,10 @@ static void drawStandbyScreen() {
   u8g2.clearBuffer();
   drawHeader("STANDBY");
 
-  // Draw 12V voltage top-right
+  // Draw 12V voltage top-right with 2 decimals for accuracy
   float v12 = getVoltage12V();
-  char v12buf[10];
-  snprintf(v12buf, sizeof(v12buf), "%.1fV", v12);
+  char v12buf[12];
+  snprintf(v12buf, sizeof(v12buf), "%.2fV", v12);
   u8g2.setFont(u8g2_font_6x12_tf);
   int v12W = u8g2.getStrWidth(v12buf);
   u8g2.drawStr(128 - v12W, 10, v12buf);
