@@ -34,6 +34,7 @@ static bool fanBootTestDone = false;
 static bool smpsFaultLatched = false, smpsCutActive = false;
 static uint32_t smpsFaultGraceUntilMs = 0;
 static uint32_t spkProtectArmUntilMs = 0;
+static uint32_t smpsValidSince = 0;
 
 static PowerStateListener powerListener = nullptr;
 
@@ -199,6 +200,9 @@ static void smpsProtectTick() {
   if (smpsCutActive) {
     if (millis() >= smpsFaultGraceUntilMs) {
       applyRelay(false);
+      smpsCutActive = false;
+      smpsFaultLatched = false;
+      smpsFaultGraceUntilMs = 0;
     }
     
     if (v >= recover) {
@@ -218,6 +222,7 @@ void powerInit() {
   smpsCutActive = false;
   smpsFaultLatched = false;
   smpsFaultGraceUntilMs = 0;
+  smpsValidSince = 0;
 
   pinMode(RELAY_MAIN_PIN, OUTPUT);
   applyRelay(false);
@@ -311,9 +316,26 @@ void powerTick(const uint32_t now) {
     if (safeModeActive) fanWriteDuty(0);
   } else {
     fanWriteDuty(0);
+    smpsValidSince = 0;
   }
 
   smpsProtectTick();
+
+  if (relayOn && !powerSmpsSoftstartActive()) {
+    const bool smpsBypass = stateSmpsBypass();
+    const float voltage = getVoltageInstant();
+    const bool smpsNoPower = (!smpsBypass && voltage == 0.0f);
+    const bool smpsLowVolt = (!smpsBypass && voltage > 0.0f && voltage < stateSmpsCutoffV());
+    const bool smpsFault = (smpsNoPower || smpsLowVolt);
+
+    if (!smpsFault) {
+      if (smpsValidSince == 0) smpsValidSince = now;
+    } else {
+      smpsValidSince = 0;
+    }
+  } else {
+    smpsValidSince = 0;
+  }
 
 #if FEAT_SPK_PROTECT_ENABLE
   const bool smpsPassed = relayOn && !powerSmpsSoftstartActive() &&
@@ -427,6 +449,7 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
     smpsFaultGraceUntilMs = 0;
     protectFaultLatched = false;
     spkProtectOk = true;
+    smpsValidSince = 0;
   }
 
   applyRelay(on);
@@ -437,6 +460,7 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
     smpsCutActive = false;
     smpsFaultLatched = false;
     smpsFaultGraceUntilMs = 0;
+    smpsValidSince = 0;
     spkProtectArmUntilMs = millis() + SMPS_SOFTSTART_MS + SPK_PROTECT_ARM_MS;
 #if FEAT_PC_DETECT_ENABLE
     pcGraceUntilMs = millis() + PC_DETECT_GRACE_MS;
@@ -510,3 +534,9 @@ bool powerSmpsTripLatched() { return smpsFaultLatched; }
 
 void powerSmpsStartSoftstart(uint32_t msDelay) { smpsSoftstartUntilMs = millis() + msDelay; }
 bool powerSmpsSoftstartActive() { return millis() < smpsSoftstartUntilMs; }
+bool powerSmpsIsValid() {
+  if (!relayOn) return false;
+  if (powerSmpsSoftstartActive()) return false;
+  if (smpsValidSince == 0) return false;
+  return (millis() - smpsValidSince) >= 3000;
+}

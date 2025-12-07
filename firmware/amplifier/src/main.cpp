@@ -148,8 +148,6 @@ void appTick() {
 
   static bool lastSpkFault = false, lastSmpsFault = false;
   static uint32_t lastWarnBuzzMs = 0;
-  static bool smpsErrorTonePlayed = false;
-  static uint32_t smpsValidSince = 0;
 
   static bool btnInit = false, btnStable = false, btnReported = false;
   static uint32_t btnLastChange = 0;
@@ -160,6 +158,7 @@ void appTick() {
   powerTick(now);
 
   bool powerOn = powerIsOn();
+  bool smpsValid = powerSmpsIsValid();
 
 #if FEAT_FACTORY_RESET_COMBO
   static bool frDialogActive = false, frAwaitRepress = false;
@@ -245,25 +244,17 @@ void appTick() {
     if (inSoftstart) {
       if (lastSmpsFault) buzzStop();
       lastSmpsFault = false;
-      smpsErrorTonePlayed = false;
-      smpsValidSince = 0;
     } else if (smpsFault && !lastSmpsFault) {
       uiShowError("SMPS PROTECT");
       buzzStop();
       buzzPattern(BuzzPatternId::SMPS_ERROR);
-      smpsErrorTonePlayed = true;
       lastSmpsFault = true;
-      smpsValidSince = 0;
-    } else if (!smpsFault && !lastSmpsFault) {
-      if (smpsValidSince == 0) smpsValidSince = now;
     }
 
     if (!smpsFault && lastSmpsFault && !inSoftstart) {
       buzzStop();
       lastSmpsFault = false;
-      smpsErrorTonePlayed = false;
       if (!uiIsErrorActive()) uiClearErrorToRun();
-      smpsValidSince = now;
     }
 
     if (!protectFault && !smpsFault && warnNow) {
@@ -272,13 +263,15 @@ void appTick() {
         lastWarnBuzzMs = now;
       }
     }
+
+    if (smpsValid && !uiIsErrorActive()) {
+      uiTransitionToRun();
+    }
   } else {
     if (now >= standbyBuzzAllowUntil) {
       buzzStop();
       lastSpkFault = false;
       lastSmpsFault = false;
-      smpsErrorTonePlayed = false;
-      smpsValidSince = 0;
     }
   }
 
@@ -290,7 +283,7 @@ void appTick() {
 #endif
 
   uiSetInputStatus(powerBtMode(), powerGetSpeakerSelectBig());
-  if (powerOn && !uiIsErrorActive() && (smpsValidSince != 0 && (now - smpsValidSince >= 3000))) {
+  if (smpsValid && !uiIsErrorActive()) {
     const bool btMode = powerBtMode();
     if (btMode != lastBtMode) {
       buzzPattern(btMode ? BuzzPatternId::ENTER_BT : BuzzPatternId::ENTER_AUX);

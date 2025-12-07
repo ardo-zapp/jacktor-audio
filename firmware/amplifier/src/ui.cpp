@@ -26,7 +26,6 @@ static bool spkBig = SPK_DEFAULT_BIG;
 static uint8_t bootRows = 0;
 static const uint8_t MAX_BOOT_ROWS = 6;
 static uint32_t lastDrawMs = 0;
-static bool forceStandbyFlag = false;
 
 static inline void drawHeader(const char* title) {
   u8g2.setFont(u8g2_font_6x12_tf);
@@ -121,14 +120,12 @@ static void drawWarning(const char* msg) {
 void uiInit() {
   u8g2.begin();
   u8g2.setPowerSave(0);
-  scene = powerIsOn() ? UiScene::RUN : UiScene::STANDBY;
+  scene = powerIsOn() ? UiScene::SPLASH : UiScene::STANDBY;
   lastDrawMs = 0;
-  forceStandbyFlag = false;
 }
 
 void uiShowBoot(uint32_t holdMs) {
   scene = UiScene::SPLASH;
-  forceStandbyFlag = false;
   drawSplash(FW_NAME);
   if (holdMs > 0) delay(holdMs);
 }
@@ -149,16 +146,9 @@ void uiTick(uint32_t now) {
   lastDrawMs = now;
 
   const bool standby = powerIsStandby();
-  const bool on = powerIsOn();
 
-  if (forceStandbyFlag || standby) {
-    if (scene != UiScene::STANDBY && scene != UiScene::WARN && scene != UiScene::ERROR) {
-      scene = UiScene::STANDBY;
-    }
-  } else if (on && (scene == UiScene::STANDBY || scene == UiScene::SPLASH)) {
-    if (scene != UiScene::ERROR && scene != UiScene::WARN) {
-      scene = UiScene::RUN;
-    }
+  if (standby && scene != UiScene::STANDBY && scene != UiScene::WARN && scene != UiScene::ERROR) {
+    scene = UiScene::STANDBY;
   }
 
   switch (scene) {
@@ -208,9 +198,14 @@ void uiShowStandby() {
 }
 
 void uiForceStandby() {
-  forceStandbyFlag = true;
   scene = UiScene::STANDBY;
   drawStandbyScreen();
+}
+
+void uiTransitionToRun() {
+  if (scene == UiScene::SPLASH || scene == UiScene::BOOTLOG) {
+    scene = UiScene::RUN;
+  }
 }
 
 bool uiIsErrorActive() {

@@ -11,6 +11,7 @@ void uiShowWarning(const char* msg);
 void uiClearErrorToRun();
 void uiShowStandby();
 void uiForceStandby();
+void uiTransitionToRun();
 void uiSetClock(const char* hhmmss);
 void uiSetDate(const char* yyyymmdd);
 void uiSetInputStatus(bool bt, bool speakerBig);
