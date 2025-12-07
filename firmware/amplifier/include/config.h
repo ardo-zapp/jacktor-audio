@@ -149,8 +149,8 @@
 #define R2_12V_OHMS              9870.0f    // 9.87 kΩ (ACTUAL resistor, jangan diubah)
 
 // Software calibration offset untuk 12V
-// Measured: 12.20V → Actual: 12.17V → Offset: -0.030V
-#define V12_OFFSET_V             -0.030f    // Software calibration offset
+// Measured: 12.20V → Actual: 12.17V
+#define V12_OFFSET_V             (-0.010f)    // Software calibration offset
 
 // Bawah ambang ini dianggap "tidak ada daya" (noise floor)
 #define VOLT_MIN_VALID_V         0.0f
