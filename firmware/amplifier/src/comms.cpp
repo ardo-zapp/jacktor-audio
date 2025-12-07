@@ -250,6 +250,8 @@ static void sendSlowTelemetry(uint32_t now) {
   smps["cutoff"] = stateSmpsCutoffV();
   smps["recover"] = stateSmpsRecoveryV();
 
+  data["v12"] = getVoltage12V();
+
   setFloatOrNull(data, "heat_c", getHeatsinkC());
   setFloatOrNull(data, "rtc_c", sensorsGetRtcTempC());
 
