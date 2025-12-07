@@ -146,7 +146,7 @@ void appTick() {
   static bool lastBtMode = false;
 
   static bool lastSpkFault = false, lastSmpsFault = false;
-  static uint32_t lastFatalBuzzMs = 0, lastWarnBuzzMs = 0, smpsFaultSince = 0;
+  static uint32_t lastWarnBuzzMs = 0;
   static bool smpsErrorTonePlayed = false;
 
   static bool btnInit = false, btnStable = false, btnReported = false;
@@ -243,25 +243,18 @@ void appTick() {
     if (inSoftstart) {
       if (lastSmpsFault) buzzStop();
       lastSmpsFault = false;
-      smpsFaultSince = 0;
       smpsErrorTonePlayed = false;
     } else if (smpsFault && !lastSmpsFault) {
-      smpsFaultSince = now;
       uiShowError("SMPS PROTECT");
       buzzStop();
       buzzPattern(BuzzPatternId::SMPS_ERROR);
       smpsErrorTonePlayed = true;
       lastSmpsFault = true;
-    } else if (smpsFault && lastSmpsFault) {
-      if (now - smpsFaultSince >= 10000) {
-        powerSetMainRelay(false, PowerChangeReason::Command);
-      }
     }
 
     if (!smpsFault && lastSmpsFault && !inSoftstart) {
       buzzStop();
       lastSmpsFault = false;
-      smpsFaultSince = 0;
       smpsErrorTonePlayed = false;
     }
 
@@ -276,7 +269,6 @@ void appTick() {
       buzzStop();
       lastSpkFault = false;
       lastSmpsFault = false;
-      smpsFaultSince = 0;
       smpsErrorTonePlayed = false;
     }
   }
