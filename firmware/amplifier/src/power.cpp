@@ -32,6 +32,7 @@ static uint32_t pcLastRawMs = 0, pcGraceUntilMs = 0, pcOffSchedAt = 0;
 
 static bool fanBootTestDone = false;
 static bool smpsFaultLatched = false, smpsCutActive = false;
+static uint32_t smpsFaultGraceUntilMs = 0;
 static uint32_t spkProtectArmUntilMs = 0;
 
 static PowerStateListener powerListener = nullptr;
@@ -156,6 +157,7 @@ static void smpsProtectTick() {
   if (!FEAT_SMPS_PROTECT_ENABLE) {
     smpsCutActive = false;
     smpsFaultLatched = false;
+    smpsFaultGraceUntilMs = 0;
     if (relayOn != relayRequested) applyRelay(relayRequested);
     return;
   }
@@ -163,6 +165,7 @@ static void smpsProtectTick() {
   if (millis() < smpsSoftstartUntilMs) {
     smpsCutActive = false;
     smpsFaultLatched = false;
+    smpsFaultGraceUntilMs = 0;
     if (relayOn != relayRequested) applyRelay(relayRequested);
     return;
   }
@@ -170,6 +173,7 @@ static void smpsProtectTick() {
   if (stateSmpsBypass()) {
     smpsCutActive = false;
     smpsFaultLatched = false;
+    smpsFaultGraceUntilMs = 0;
     if (relayOn != relayRequested) applyRelay(relayRequested);
     return;
   }
@@ -177,6 +181,7 @@ static void smpsProtectTick() {
   if (!relayRequested) {
     smpsCutActive = false;
     smpsFaultLatched = false;
+    smpsFaultGraceUntilMs = 0;
     if (relayOn) applyRelay(false);
     return;
   }
@@ -188,13 +193,20 @@ static void smpsProtectTick() {
   if (!smpsCutActive && relayOn && v > 0.0f && v < cutoff) {
     smpsCutActive = true;
     smpsFaultLatched = true;
-    applyRelay(false);
+    smpsFaultGraceUntilMs = millis() + 10000;
   }
 
-  if (smpsCutActive && v >= recover) {
-    smpsCutActive = false;
-    smpsFaultLatched = false;
-    if (relayRequested) applyRelay(true);
+  if (smpsCutActive) {
+    if (millis() >= smpsFaultGraceUntilMs) {
+      applyRelay(false);
+    }
+    
+    if (v >= recover) {
+      smpsCutActive = false;
+      smpsFaultLatched = false;
+      smpsFaultGraceUntilMs = 0;
+      if (relayRequested) applyRelay(true);
+    }
   }
 }
 
@@ -205,6 +217,7 @@ void powerInit() {
   powerSmpsStartSoftstart(SMPS_SOFTSTART_MS);
   smpsCutActive = false;
   smpsFaultLatched = false;
+  smpsFaultGraceUntilMs = 0;
 
   pinMode(RELAY_MAIN_PIN, OUTPUT);
   applyRelay(false);
@@ -411,6 +424,7 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
   if (!on) {
     smpsCutActive = false;
     smpsFaultLatched = false;
+    smpsFaultGraceUntilMs = 0;
     protectFaultLatched = false;
     spkProtectOk = true;
   }
@@ -422,6 +436,7 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
     powerSmpsStartSoftstart(SMPS_SOFTSTART_MS);
     smpsCutActive = false;
     smpsFaultLatched = false;
+    smpsFaultGraceUntilMs = 0;
     spkProtectArmUntilMs = millis() + SMPS_SOFTSTART_MS + SPK_PROTECT_ARM_MS;
 #if FEAT_PC_DETECT_ENABLE
     pcGraceUntilMs = millis() + PC_DETECT_GRACE_MS;
