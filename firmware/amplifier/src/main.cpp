@@ -289,12 +289,8 @@ void appTick() {
     }
   }
 
+  // Force UI to standby when in standby mode (no spam log)
   if (powerStandby) {
-    static uint32_t lastStandbyLog = 0;
-    if (now - lastStandbyLog > 1000) {
-      LOGF("[MAIN] powerStandby=true, forcing UI standby\n");
-      lastStandbyLog = now;
-    }
     uiForceStandby();
   }
 
