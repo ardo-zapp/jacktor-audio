@@ -10,11 +10,12 @@
 
 static Adafruit_ADS1115 ads;
 
-static inline float adcToRealVolt(float vAdc) {
-  return vAdc * ((R1_OHMS + R2_OHMS) / R2_OHMS);
+static inline float adcToRealVolt(float vAdc, float r1, float r2) {
+  return vAdc * ((r1 + r2) / r2);
 }
 
 static float voltInstant = 0.0f;
+static float volt12V = 0.0f;
 
 static OneWire oneWire(DS18B20_PIN);
 static DallasTemperature dallas(&oneWire);
@@ -54,6 +55,7 @@ void sensorsInit() {
   analyzerSetEnabled(true);
 
   voltInstant = 0.0f;
+  volt12V = 0.0f;
   heatC = NAN;
   lastTempMs = 0;
   rtcTempC = NAN;
@@ -61,10 +63,17 @@ void sensorsInit() {
 }
 
 void sensorsTick(uint32_t now) {
-  int16_t raw = ads.readADC_SingleEnded(ADS_CHANNEL);
-  float vAdc = ads.computeVolts(raw);
-  float vReal = adcToRealVolt(vAdc);
-  voltInstant = (vReal >= VOLT_MIN_VALID_V) ? vReal : 0.0f;
+  // Read SMPS 65V (Channel 0)
+  int16_t rawSmps = ads.readADC_SingleEnded(ADS_CHANNEL_SMPS);
+  float vAdcSmps = ads.computeVolts(rawSmps);
+  float vRealSmps = adcToRealVolt(vAdcSmps, R1_OHMS, R2_OHMS);
+  voltInstant = (vRealSmps >= VOLT_MIN_VALID_V) ? vRealSmps : 0.0f;
+
+  // Read 12V rail (Channel 1)
+  int16_t raw12V = ads.readADC_SingleEnded(ADS_CHANNEL_12V);
+  float vAdc12V = ads.computeVolts(raw12V);
+  float vReal12V = adcToRealVolt(vAdc12V, R1_12V_OHMS, R2_12V_OHMS);
+  volt12V = (vReal12V >= VOLT_MIN_VALID_V) ? vReal12V : 0.0f;
 
   if (now - lastTempMs >= 1000) {
     lastTempMs = now;
@@ -89,6 +98,10 @@ void sensorsTick(uint32_t now) {
 
 float getVoltageInstant() {
   return voltInstant;
+}
+
+float getVoltage12V() {
+  return volt12V;
 }
 
 float getHeatsinkC() {

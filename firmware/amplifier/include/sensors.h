@@ -6,7 +6,8 @@
 void  sensorsInit();
 void  sensorsTick(uint32_t now);
 
-float getVoltageInstant();   // Volt (ADS1115, tanpa smoothing)
+float getVoltageInstant();   // Volt SMPS 65V (ADS1115 A0, tanpa smoothing)
+float getVoltage12V();       // Volt 12V rail (ADS1115 A1, tanpa smoothing)
 float getHeatsinkC();        // °C (DS18B20) atau NAN jika invalid
 float sensorsGetRtcTempC();  // °C RTC internal (DS3231) atau NAN
 

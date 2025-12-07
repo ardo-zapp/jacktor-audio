@@ -127,22 +127,34 @@
 
 // ============================================================================
 //  Voltmeter: ADS1115 (EKSTERNAL) — TANPA smoothing
+//  
+//  Channel 0 (A0): SMPS 65V
 //  - Divider R1 ke Vin (atas) dan R2 ke GND (bawah)
 //  - Gunakan nilai REAL hasil pengukuran agar akurat
+//
+//  Channel 1 (A1): 12V Rail
+//  - Divider R1_12V dan R2_12V
 // ============================================================================
 #define ADS_I2C_ADDR             0x48
-#define ADS_CHANNEL              0       // 0..3 (single-ended)
-#define R1_OHMS                  201200.0f  // 201.2 kΩ
-#define R2_OHMS                  10030.0f   // ADS1115 divider lower resistor (ohms)
 
-// Bawah ambang ini dianggap “tidak ada daya” (noise floor)
+// SMPS 65V (Channel 0)
+#define ADS_CHANNEL_SMPS         0
+#define R1_OHMS                  201200.0f  // 201.2 kΩ
+#define R2_OHMS                  10030.0f   // 10.03 kΩ
+
+// 12V Rail (Channel 1)
+#define ADS_CHANNEL_12V          1
+#define R1_12V_OHMS              29630.0f   // 29.63 kΩ
+#define R2_12V_OHMS              9870.0f    // 9.87 kΩ
+
+// Bawah ambang ini dianggap "tidak ada daya" (noise floor)
 #define VOLT_MIN_VALID_V         0.0f
 
 
 // ============================================================================
 //  Proteksi SMPS 65V
 //  - cutoff  : jika ON dan V < cutoff → trip ke STANDBY
-//  - recovery: ambang untuk “aman ON” lagi
+//  - recovery: ambang untuk "aman ON" lagi
 //  - bypass  : abaikan proteksi (untuk testing)
 // ============================================================================
 #define SMPS_CUTOFF_V            SMPS_CUT_V
@@ -187,7 +199,7 @@
 // ============================================================================
 //  Fan PWM (tanpa tachometer) + kurva AUTO 3-titik
 //  - Mode: AUTO / CUSTOM / FAILSAFE (persist di NVS)
-//  - Boot test opsional agar kipas “ngeroll” sebentar
+//  - Boot test opsional agar kipas "ngeroll" sebentar
 // ============================================================================
 #define FAN_PWM_PIN              32
 #define FAN_PWM_CH               0
