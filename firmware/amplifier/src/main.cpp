@@ -25,6 +25,7 @@ static bool powerInitDone = false;
 static uint32_t standbyBuzzAllowUntil = 0;
 static bool bootTonePlayed = false;
 static bool initLogPrinted = false;
+static bool standbyBuzzStopped = false;  // ← NEW: track if we already stopped buzz once
 
 static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReason reason);
 
@@ -67,6 +68,7 @@ static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReas
     uiShowBoot(UI_BOOT_HOLD_MS);
     powerSmpsStartSoftstart(SMPS_SOFTSTART_MS);
     bootTonePlayed = false;
+    standbyBuzzStopped = false;  // ← Reset flag saat masuk ON
   } else {
     LOGF("[UI] Force standby from callback\n");
     uiForceStandby();
@@ -74,6 +76,7 @@ static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReas
     buzzPattern(BuzzPatternId::SHUTDOWN);
     standbyBuzzAllowUntil = millis() + 450;
     bootTonePlayed = false;
+    standbyBuzzStopped = false;  // ← Reset flag, nanti akan di-set setelah grace period
   }
 }
 
@@ -136,6 +139,7 @@ void appInit() {
   powerInit();
   powerInitDone = true;
   bootTonePlayed = false;
+  standbyBuzzStopped = false;
   uiShowStandby();
 
 #if OTA_ENABLE
@@ -289,11 +293,17 @@ void appTick() {
       }
     }
   } else {
-    if (now >= standbyBuzzAllowUntil) {
+    // ====== FIX: Only stop buzzer ONCE after grace period ======
+    if (now >= standbyBuzzAllowUntil && !standbyBuzzStopped) {
+      // Stop shutdown tone after grace period (450ms)
       buzzStop();
       lastSpkFault = false;
       lastSmpsFault = false;
+      standbyBuzzStopped = true;  // Mark as stopped
+      LOGF("[BUZZ] Standby buzz stopped after grace period\n");
     }
+    // JANGAN panggil buzzStop() lagi di sini!
+    // Biarkan custom buzz (buzz-melody dari serial) bisa jalan normal
   }
 
   // Log standby transition once when entering standby mode

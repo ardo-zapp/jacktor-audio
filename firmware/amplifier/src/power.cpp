@@ -91,14 +91,32 @@ static void fanWriteDuty(uint16_t duty) {
   ledc_update_duty(FAN_LEDC_MODE, FAN_LEDC_CH);
 }
 
+// 3-point piecewise linear fan curve using config.h values
 static uint16_t fanCurveAuto(float tC) {
-  constexpr uint16_t dutyMin = 250, dutyMax = 1023;
-  if (isnan(tC)) return dutyMin;
-  constexpr float tLow = 40.0f, tHigh = 80.0f;
-  if (tC <= tLow) return dutyMin;
-  if (tC >= tHigh) return dutyMax;
-  const float f = (tC - tLow) / (tHigh - tLow);
-  return static_cast<uint16_t>(dutyMin + f * (dutyMax - dutyMin));
+  if (isnan(tC)) {
+    // Sensor error: use safe minimum duty
+    return FAN_AUTO_D1;
+  }
+
+  // Below T1: constant duty D1
+  if (tC <= FAN_AUTO_T1_C) {
+    return FAN_AUTO_D1;
+  }
+
+  // Between T1 and T2: linear interpolation D1 -> D2
+  if (tC <= FAN_AUTO_T2_C) {
+    float f = (tC - FAN_AUTO_T1_C) / (FAN_AUTO_T2_C - FAN_AUTO_T1_C);
+    return static_cast<uint16_t>(FAN_AUTO_D1 + f * (FAN_AUTO_D2 - FAN_AUTO_D1));
+  }
+
+  // Between T2 and T3: linear interpolation D2 -> D3
+  if (tC <= FAN_AUTO_T3_C) {
+    float f = (tC - FAN_AUTO_T2_C) / (FAN_AUTO_T3_C - FAN_AUTO_T2_C);
+    return static_cast<uint16_t>(FAN_AUTO_D2 + f * (FAN_AUTO_D3 - FAN_AUTO_D2));
+  }
+
+  // Above T3: constant maximum duty
+  return FAN_AUTO_D3;
 }
 
 static void fanTick() {
@@ -130,7 +148,7 @@ static void applyBtHardware(const uint32_t now) {
     const uint32_t idleMs = stateBtAutoOffMs();
     if (idleMs > 0) {
       if (!btMode && btLastAuxMs != 0 && (now - btLastAuxMs) >= idleMs) {
-        shouldOn = false;  // ← AUTO-OFF, tidak bisa di-override!
+        shouldOn = false;
       }
     }
   }
@@ -204,7 +222,7 @@ static void smpsProtectTick() {
       smpsFaultLatched = false;
       smpsFaultGraceUntilMs = 0;
     }
-    
+
     if (v >= recover) {
       smpsCutActive = false;
       smpsFaultLatched = false;
@@ -313,10 +331,14 @@ void powerInit() {
 }
 
 void powerTick(const uint32_t now) {
-  // FAN: Always run fanTick(), even in standby (allows manual control)
+  // FAN: Always run fanTick(), even in standby (allows manual control and proper auto mode)
   fanTick();
-  if (safeModeActive) fanWriteDuty(0);
-  
+
+  // Override fan to 0 if safe mode active
+  if (safeModeActive) {
+    fanWriteDuty(0);
+  }
+
   // SMPS valid tracking only when ON
   if (!powerIsOn()) {
     smpsValidSince = 0;
@@ -497,16 +519,16 @@ void powerSetBtEnabled(bool en) {
   btEn = en;
   stateSetBtEnabled(en);
   uint32_t now = ms();
-  
+
   // Reset auto-off timer when manually enabling BT
   if (en) {
     btLastAuxMs = 0;  // Reset timer BEFORE applyBtHardware()
     btLowSinceMs = 0;
     btLastEnteredBtMs = 0;
   }
-  
+
   applyBtHardware(now);
-  
+
   // Update BT mode after hardware applied
   if (en && btHwOn) {
     btMode = _readBtStatusActiveLow();
