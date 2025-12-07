@@ -67,6 +67,7 @@ static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReas
     buzzStop();
     buzzPattern(BuzzPatternId::BOOT);
   } else {
+    uiShowStandby();
     buzzStop();
     buzzPattern(BuzzPatternId::SHUTDOWN);
     standbyBuzzAllowUntil = millis() + 450;
@@ -148,6 +149,7 @@ void appTick() {
   static bool lastSpkFault = false, lastSmpsFault = false;
   static uint32_t lastWarnBuzzMs = 0;
   static bool smpsErrorTonePlayed = false;
+  static uint32_t smpsValidSince = 0;
 
   static bool btnInit = false, btnStable = false, btnReported = false;
   static uint32_t btnLastChange = 0;
@@ -244,18 +246,24 @@ void appTick() {
       if (lastSmpsFault) buzzStop();
       lastSmpsFault = false;
       smpsErrorTonePlayed = false;
+      smpsValidSince = 0;
     } else if (smpsFault && !lastSmpsFault) {
       uiShowError("SMPS PROTECT");
       buzzStop();
       buzzPattern(BuzzPatternId::SMPS_ERROR);
       smpsErrorTonePlayed = true;
       lastSmpsFault = true;
+      smpsValidSince = 0;
+    } else if (!smpsFault && !lastSmpsFault) {
+      if (smpsValidSince == 0) smpsValidSince = now;
     }
 
     if (!smpsFault && lastSmpsFault && !inSoftstart) {
       buzzStop();
       lastSmpsFault = false;
       smpsErrorTonePlayed = false;
+      uiClearErrorToRun();
+      smpsValidSince = now;
     }
 
     if (!protectFault && !smpsFault && warnNow) {
@@ -270,6 +278,7 @@ void appTick() {
       lastSpkFault = false;
       lastSmpsFault = false;
       smpsErrorTonePlayed = false;
+      smpsValidSince = 0;
     }
   }
 
@@ -281,7 +290,7 @@ void appTick() {
 #endif
 
   uiSetInputStatus(powerBtMode(), powerGetSpeakerSelectBig());
-  if (powerOn && !(lastSpkFault || lastSmpsFault)) {
+  if (powerOn && !(lastSpkFault || lastSmpsFault) && (smpsValidSince != 0 && (now - smpsValidSince >= 3000))) {
     const bool btMode = powerBtMode();
     if (btMode != lastBtMode) {
       buzzPattern(btMode ? BuzzPatternId::ENTER_BT : BuzzPatternId::ENTER_AUX);
