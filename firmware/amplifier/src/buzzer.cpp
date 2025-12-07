@@ -26,6 +26,8 @@ struct BuzzPatternDef {
   bool fatal;
 };
 
+static constexpr uint16_t BIOS_DUTY = 307;
+
 static const BuzzStep PATTERN_BOOT[] = {
   {880, 90, BUZZER_DUTY_DEFAULT}, {0, 30, 0},
   {1175, 90, BUZZER_DUTY_DEFAULT}, {0, 30, 0},
@@ -42,12 +44,12 @@ static const BuzzStep PATTERN_BT[] = {{1568, 60, BUZZER_DUTY_DEFAULT}, {0, 40, 0
 static const BuzzStep PATTERN_AUX[] = {{1175, 60, BUZZER_DUTY_DEFAULT}};
 static const BuzzStep PATTERN_CLICK[] = {{3000, 25, BUZZER_DUTY_STRONG}};
 static const BuzzStep PATTERN_WARNING[] = {{1175, 70, BUZZER_DUTY_DEFAULT}};
-static const BuzzStep PATTERN_ERROR[] = {{880, 70, BUZZER_DUTY_STRONG}, {0, 100, 0}, {880, 120, BUZZER_DUTY_STRONG}};
-static const BuzzStep PATTERN_PROTECT_LONG[] = {{750, 220, BUZZER_DUTY_STRONG}, {0, 180, 0}};
+static const BuzzStep PATTERN_ERROR[] = {{800, 100, BIOS_DUTY}, {0, 100, 0}, {800, 150, BIOS_DUTY}};
+static const BuzzStep PATTERN_PROTECT_LONG[] = {{750, 220, BIOS_DUTY}, {0, 180, 0}};
 static const BuzzStep PATTERN_SMPS_ERROR[] = {
-  {880, 200, BUZZER_DUTY_STRONG}, {0, 150, 0},
-  {880, 200, BUZZER_DUTY_STRONG}, {0, 150, 0},
-  {880, 200, BUZZER_DUTY_STRONG}
+  {800, 250, BIOS_DUTY}, {0, 150, 0},
+  {800, 250, BIOS_DUTY}, {0, 150, 0},
+  {800, 300, BIOS_DUTY}
 };
 
 static const BuzzPatternDef PATTERNS[] = {

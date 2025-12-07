@@ -67,7 +67,7 @@ static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReas
     buzzStop();
     buzzPattern(BuzzPatternId::BOOT);
   } else {
-    uiShowStandby();
+    uiForceStandby();
     buzzStop();
     buzzPattern(BuzzPatternId::SHUTDOWN);
     standbyBuzzAllowUntil = millis() + 450;
@@ -239,7 +239,7 @@ void appTick() {
     if (!protectFault && lastSpkFault) {
       buzzStop();
       lastSpkFault = false;
-      uiClearErrorToRun();
+      if (!uiIsErrorActive()) uiClearErrorToRun();
     }
 
     if (inSoftstart) {
@@ -262,7 +262,7 @@ void appTick() {
       buzzStop();
       lastSmpsFault = false;
       smpsErrorTonePlayed = false;
-      uiClearErrorToRun();
+      if (!uiIsErrorActive()) uiClearErrorToRun();
       smpsValidSince = now;
     }
 
@@ -290,7 +290,7 @@ void appTick() {
 #endif
 
   uiSetInputStatus(powerBtMode(), powerGetSpeakerSelectBig());
-  if (powerOn && !(lastSpkFault || lastSmpsFault) && (smpsValidSince != 0 && (now - smpsValidSince >= 3000))) {
+  if (powerOn && !uiIsErrorActive() && (smpsValidSince != 0 && (now - smpsValidSince >= 3000))) {
     const bool btMode = powerBtMode();
     if (btMode != lastBtMode) {
       buzzPattern(btMode ? BuzzPatternId::ENTER_BT : BuzzPatternId::ENTER_AUX);
