@@ -44,6 +44,11 @@ static const BuzzStep PATTERN_CLICK[] = {{3000, 25, BUZZER_DUTY_STRONG}};
 static const BuzzStep PATTERN_WARNING[] = {{1175, 70, BUZZER_DUTY_DEFAULT}};
 static const BuzzStep PATTERN_ERROR[] = {{880, 70, BUZZER_DUTY_STRONG}, {0, 100, 0}, {880, 120, BUZZER_DUTY_STRONG}};
 static const BuzzStep PATTERN_PROTECT_LONG[] = {{750, 220, BUZZER_DUTY_STRONG}, {0, 180, 0}};
+static const BuzzStep PATTERN_SMPS_ERROR[] = {
+  {600, 400, BUZZER_DUTY_STRONG}, {0, 150, 0},
+  {700, 400, BUZZER_DUTY_STRONG}, {0, 150, 0},
+  {600, 500, BUZZER_DUTY_STRONG}
+};
 
 static const BuzzPatternDef PATTERNS[] = {
   {nullptr, 0, 0, "none", true, false},
@@ -55,6 +60,7 @@ static const BuzzPatternDef PATTERNS[] = {
   {PATTERN_WARNING, sizeof(PATTERN_WARNING) / sizeof(BuzzStep), 0, "warn", false, false},
   {PATTERN_ERROR, sizeof(PATTERN_ERROR) / sizeof(BuzzStep), 0, "error", true, true},
   {PATTERN_PROTECT_LONG, sizeof(PATTERN_PROTECT_LONG) / sizeof(BuzzStep), 800, "protect_long", true, true},
+  {PATTERN_SMPS_ERROR, sizeof(PATTERN_SMPS_ERROR) / sizeof(BuzzStep), 0, "smps_error", true, true},
 };
 
 static Preferences prefs;
