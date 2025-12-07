@@ -130,7 +130,7 @@ static void applyBtHardware(const uint32_t now) {
     const uint32_t idleMs = stateBtAutoOffMs();
     if (idleMs > 0) {
       if (!btMode && btLastAuxMs != 0 && (now - btLastAuxMs) >= idleMs) {
-        shouldOn = false;
+        shouldOn = false;  // ← AUTO-OFF, tidak bisa di-override!
       }
     }
   }
