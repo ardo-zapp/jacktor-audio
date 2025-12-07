@@ -313,11 +313,12 @@ void powerInit() {
 }
 
 void powerTick(const uint32_t now) {
-  if (powerIsOn()) {
-    fanTick();
-    if (safeModeActive) fanWriteDuty(0);
-  } else {
-    fanWriteDuty(0);
+  // FAN: Always run fanTick(), even in standby (allows manual control)
+  fanTick();
+  if (safeModeActive) fanWriteDuty(0);
+  
+  // SMPS valid tracking only when ON
+  if (!powerIsOn()) {
     smpsValidSince = 0;
   }
 
@@ -496,7 +497,17 @@ void powerSetBtEnabled(bool en) {
   btEn = en;
   stateSetBtEnabled(en);
   uint32_t now = ms();
+  
+  // Reset auto-off timer when manually enabling BT
+  if (en) {
+    btLastAuxMs = 0;  // Reset timer BEFORE applyBtHardware()
+    btLowSinceMs = 0;
+    btLastEnteredBtMs = 0;
+  }
+  
   applyBtHardware(now);
+  
+  // Update BT mode after hardware applied
   if (en && btHwOn) {
     btMode = _readBtStatusActiveLow();
     btLowSinceMs = btMode ? now : 0;
