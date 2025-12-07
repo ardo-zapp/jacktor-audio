@@ -289,8 +289,10 @@ void powerInit() {
     ledc_channel_config(&fanChCfg);
 
     if (FEAT_FAN_BOOT_TEST) {
+      LOGF("[FAN] Boot test: duty=%d for %dms\n", FAN_BOOT_TEST_DUTY, FAN_BOOT_TEST_MS);
       fanWriteDuty(FAN_BOOT_TEST_DUTY);
       delay(FAN_BOOT_TEST_MS);
+      LOGF("[FAN] Boot test complete\n");
     }
     fanBootTestDone = true;
     fanWriteDuty(0);
