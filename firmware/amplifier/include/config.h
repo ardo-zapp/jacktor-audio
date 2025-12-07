@@ -74,8 +74,8 @@
 // ============================================================================
 //  Serial / UART
 // ============================================================================
-#define SERIAL_BAUD_USB          115200      // USB-CDC monitor
-#define SERIAL_BAUD_LINK         115200      // UART2 ke Panel (telemetri & command)
+#define SERIAL_BAUD_USB          921600      // USB-CDC debug logs (high speed)
+#define SERIAL_BAUD_LINK         921600      // UART2 to Panel (telemetry & commands)
 
 // Logging UART internal (Serial) -- default aktif
 #define LOG_ENABLE               1
@@ -275,7 +275,7 @@
 // ============================================================================
 //  Analyzer (Jacktor Audio FFT) — I²S ADC internal
 //  - ADC internal via driver I²S (GPIO36/ADC1_CH0)
-//  - Sample block 1024 @ 44.1 kHz → 8/16/32/64 band log-cutoff
+//  - Sample block 1024 @ 44.1 kHz → 8/16/24/32/64 band log-cutoff
 //  - Nonaktif otomatis saat STANDBY via analyzerSetEnabled(false)
 // ============================================================================
 #define I2S_PORT                 I2S_NUM_0

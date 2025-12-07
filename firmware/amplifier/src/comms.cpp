@@ -19,8 +19,8 @@
 #include <vector>
 
 extern HardwareSerial espSerial;
-static HardwareSerial &linkSerial = espSerial;  // UART2 (RX16/TX17)
-static HardwareSerial &usbSerial = Serial;       // USB Serial (native)
+static HardwareSerial &linkSerial = espSerial;  // UART2 (RX16/TX17) - Panel telemetry
+static HardwareSerial &debugSerial = Serial;     // USB CDC - Debug logs only
 
 static String rxLine;
 static uint32_t lastRxBlink = 0, lastTxBlink = 0;
@@ -35,28 +35,26 @@ static inline void ledActivityTick(uint32_t now) {
   if (now - lastRxBlink > 60 && now - lastTxBlink > 60) digitalWrite(LED_UART_PIN, LOW);
 }
 
-// Send JSON document to BOTH USB Serial and UART2
+// Send telemetry to UART2 ONLY (Panel)
 template <typename TDoc>
-static void sendDoc(const TDoc &doc) {
+static void sendTelemetry(const TDoc &doc) {
   String out;
   serializeJson(doc, out);
-  
-  // Send to UART2 (Panel)
-  linkSerial.println(out);
-  
-  // Send to USB Serial (USB port for debugging/monitoring)
-  usbSerial.println(out);
-  
+  linkSerial.println(out);  // UART2 only
   ledTxPulse();
 }
 
-// Send to specific serial only (for selective output)
+// Send debug log to USB Serial ONLY
+static void sendDebugLog(const char *msg) {
+  if (!msg) return;
+  debugSerial.println(msg);  // USB CDC only
+}
+
 template <typename TDoc>
-static void sendDocTo(HardwareSerial &serial, const TDoc &doc) {
+static void sendDebugLogJson(const TDoc &doc) {
   String out;
   serializeJson(doc, out);
-  serial.println(out);
-  ledTxPulse();
+  debugSerial.println(out);  // USB CDC only
 }
 
 static bool equalsIgnoreCase(const char *a, const char *b) {
@@ -228,7 +226,7 @@ static void sendRealtimeTelemetry(uint32_t now) {
   rt["input"] = powerInputModeStr();
   rt["bt_state"] = powerBtMode() ? "bt" : "aux";
 
-  sendDoc(root);  // Broadcast to BOTH USB and UART2
+  sendTelemetry(root);  // UART2 only
 }
 
 static void sendAnalyzerSnapshot(const char *evt) {
@@ -248,7 +246,7 @@ static void sendAnalyzerSnapshot(const char *evt) {
     const uint8_t *bands = analyzerGetBands();
     for (uint8_t i = 0; i < bandsLen; ++i) arr.add(static_cast<uint16_t>(bands[i]));
   }
-  sendDoc(root);  // Broadcast to BOTH USB and UART2
+  sendTelemetry(root);  // UART2 only
 }
 
 static void sendSlowTelemetry(uint32_t now) {
@@ -296,7 +294,7 @@ static void sendSlowTelemetry(uint32_t now) {
   writeNvsSnapshot(data);
   writeFeatures(data);
 
-  sendDoc(root);  // Broadcast to BOTH USB and UART2
+  sendTelemetry(root);  // UART2 only
 }
 
 static void playAckTone() {
@@ -311,7 +309,7 @@ static void sendAckOk(const char *key, const TValue &value, bool tone = true) {
   root["ok"] = true;
   root["changed"] = key;
   root["value"] = value;
-  sendDoc(root);
+  sendTelemetry(root);  // UART2 only
   if (tone) playAckTone();
 }
 
@@ -322,7 +320,7 @@ static void sendAckErr(const char *key, const char *reason) {
   root["ok"] = false;
   root["error"] = reason ? reason : "invalid";
   if (key) root["changed"] = key;
-  sendDoc(root);
+  sendTelemetry(root);  // UART2 only
 }
 
 static void sendLogInfoOffset(int32_t offset) {
@@ -333,7 +331,8 @@ static void sendLogInfoOffset(int32_t offset) {
   root["lvl"] = "info";
   root["msg"] = "rtc_synced";
   root["offset_sec"] = offset;
-  sendDoc(root);
+  sendTelemetry(root);     // UART2
+  sendDebugLogJson(root);  // USB debug
 }
 
 static void sendLogWarnReason(const char *msg, const char *reason) {
@@ -344,7 +343,8 @@ static void sendLogWarnReason(const char *msg, const char *reason) {
   root["lvl"] = "warn";
   root["msg"] = msg;
   root["reason"] = reason;
-  sendDoc(root);
+  sendTelemetry(root);     // UART2
+  sendDebugLogJson(root);  // USB debug
 }
 
 static void sendLogErrorReason(const char *msg, const char *reason) {
@@ -355,7 +355,8 @@ static void sendLogErrorReason(const char *msg, const char *reason) {
   root["lvl"] = "error";
   root["msg"] = msg;
   root["reason"] = reason;
-  sendDoc(root);
+  sendTelemetry(root);     // UART2
+  sendDebugLogJson(root);  // USB debug
 }
 
 void commsLogFactoryReset(const char* src) {
@@ -366,7 +367,8 @@ void commsLogFactoryReset(const char* src) {
   root["lvl"] = "info";
   root["msg"] = "factory_reset_executed";
   if (src && src[0] != '\0') root["src"] = src;
-  sendDoc(root);
+  sendTelemetry(root);     // UART2
+  sendDebugLogJson(root);  // USB debug
 }
 
 static void sendOtaEvent(const char *evt) {
@@ -374,7 +376,7 @@ static void sendOtaEvent(const char *evt) {
   JsonObject root = doc.to<JsonObject>();
   root["type"] = "ota";
   root["evt"] = evt;
-  sendDoc(root);
+  sendTelemetry(root);  // UART2 only
 }
 
 template <typename TValue>
@@ -384,7 +386,7 @@ static void sendOtaEvent(const char *evt, const char *field, const TValue &value
   root["type"] = "ota";
   root["evt"] = evt;
   root[field] = value;
-  sendDoc(root);
+  sendTelemetry(root);  // UART2 only
 }
 
 static void sendOtaWriteOk(uint32_t seq) {
@@ -393,7 +395,7 @@ static void sendOtaWriteOk(uint32_t seq) {
   root["type"] = "ota";
   root["evt"] = "write_ok";
   root["seq"] = seq;
-  sendDoc(root);
+  sendTelemetry(root);  // UART2 only
 }
 
 static void sendOtaWriteErr(uint32_t seq, const char *err) {
@@ -403,7 +405,7 @@ static void sendOtaWriteErr(uint32_t seq, const char *err) {
   root["evt"] = "write_err";
   root["seq"] = seq;
   root["err"] = err ? err : "error";
-  sendDoc(root);
+  sendTelemetry(root);  // UART2 only
 }
 
 static void sendOtaError(const char *err) {
@@ -412,7 +414,7 @@ static void sendOtaError(const char *err) {
   root["type"] = "ota";
   root["evt"] = "error";
   root["err"] = err ? err : "unknown";
-  sendDoc(root);
+  sendTelemetry(root);  // UART2 only
 }
 
 static int64_t daysFromCivil(int y, unsigned m, unsigned d) {
@@ -795,10 +797,11 @@ void commsInit() {
   pinMode(LED_UART_PIN, OUTPUT);
   digitalWrite(LED_UART_PIN, LOW);
 
-  // Initialize USB Serial (native CDC)
-  usbSerial.begin(SERIAL_BAUD_USB);
+  // Initialize USB Serial for debug logs only (921600 baud)
+  debugSerial.begin(SERIAL_BAUD_USB);
+  debugSerial.println("[DEBUG] USB Serial initialized (921600 baud)");
   
-  // Initialize UART2 (Panel communication)
+  // Initialize UART2 for Panel telemetry (921600 baud)
   linkSerial.begin(SERIAL_BAUD_LINK, SERIAL_8N1, UART2_RX_PIN, UART2_TX_PIN);
   
   rxLine.reserve(4096);
@@ -806,12 +809,14 @@ void commsInit() {
   lastHz1Ms = 0;
   otaReady = true;
   forceTel = true;
+  
+  sendDebugLog("[DEBUG] UART2 initialized (921600 baud)");
 }
 
 void commsTick(uint32_t now, bool sqwTick) {
   ledActivityTick(now);
 
-  // Read from UART2 (Panel) - primary command source
+  // Read commands from UART2 (Panel) - primary source
   while (linkSerial.available()) {
     int c = linkSerial.read();
     if (c < 0) break;
@@ -828,9 +833,9 @@ void commsTick(uint32_t now, bool sqwTick) {
     }
   }
   
-  // Also read from USB Serial (for debugging/testing)
-  while (usbSerial.available()) {
-    int c = usbSerial.read();
+  // Also read from USB Serial (for testing/debugging)
+  while (debugSerial.available()) {
+    int c = debugSerial.read();
     if (c < 0) break;
     ledRxPulse();
 
@@ -845,7 +850,7 @@ void commsTick(uint32_t now, bool sqwTick) {
     }
   }
 
-  // Send realtime telemetry (if system ON)
+  // Send realtime telemetry to UART2 only (if system ON)
   if (TELEM_REALTIME_ENABLE && powerIsOn()) {
     uint32_t intervalRt = (TELEM_HZ_REALTIME > 0) ? (1000UL / TELEM_HZ_REALTIME) : 0;
     if (intervalRt == 0 || now - lastRtMs >= intervalRt) {
@@ -854,7 +859,7 @@ void commsTick(uint32_t now, bool sqwTick) {
     }
   }
 
-  // Send slow telemetry
+  // Send slow telemetry to UART2 only
   bool shouldSendSlow = forceTel;
   uint32_t slowInterval = (TELEM_SLOW_HZ > 0) ? (1000UL / TELEM_SLOW_HZ) : 0;
   if (!shouldSendSlow) {
@@ -885,5 +890,6 @@ void commsLog(const char* level, const char* msg) {
   root["type"] = "log";
   root["lvl"] = level ? level : "info";
   root["msg"] = msg ? msg : "";
-  sendDoc(root);
+  sendTelemetry(root);     // UART2
+  sendDebugLogJson(root);  // USB debug
 }
