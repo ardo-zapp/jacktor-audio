@@ -69,10 +69,14 @@ void sensorsTick(uint32_t now) {
   float vRealSmps = adcToRealVolt(vAdcSmps, R1_OHMS, R2_OHMS);
   voltInstant = (vRealSmps >= VOLT_MIN_VALID_V) ? vRealSmps : 0.0f;
 
-  // Read 12V rail (Channel 1)
+  // Read 12V rail (Channel 1) with software calibration
   int16_t raw12V = ads.readADC_SingleEnded(ADS_CHANNEL_12V);
   float vAdc12V = ads.computeVolts(raw12V);
   float vReal12V = adcToRealVolt(vAdc12V, R1_12V_OHMS, R2_12V_OHMS);
+  
+  // Apply software calibration offset
+  vReal12V += V12_OFFSET_V;
+  
   volt12V = (vReal12V >= VOLT_MIN_VALID_V) ? vReal12V : 0.0f;
 
   if (now - lastTempMs >= 1000) {

@@ -133,8 +133,8 @@
 //  - Gunakan nilai REAL hasil pengukuran agar akurat
 //
 //  Channel 1 (A1): 12V Rail
-//  - Divider R1_12V dan R2_12V
-//  - Kalibrasi: Multimeter 12.17V → firmware adjusted untuk akurasi
+//  - Divider R1_12V dan R2_12V (nilai ACTUAL resistor fisik)
+//  - Kalibrasi via software offset (V12_OFFSET_V)
 // ============================================================================
 #define ADS_I2C_ADDR             0x48
 
@@ -143,10 +143,14 @@
 #define R1_OHMS                  201200.0f  // 201.2 kΩ
 #define R2_OHMS                  10030.0f   // 10.03 kΩ
 
-// 12V Rail (Channel 1) - FINE-TUNED CALIBRATION
+// 12V Rail (Channel 1)
 #define ADS_CHANNEL_12V          1
-#define R1_12V_OHMS              29436.0f   // 29.44 kΩ (fine-tuned: 12.17V exact)
-#define R2_12V_OHMS              9870.0f    // 9.87 kΩ
+#define R1_12V_OHMS              29630.0f   // 29.63 kΩ (ACTUAL resistor, jangan diubah)
+#define R2_12V_OHMS              9870.0f    // 9.87 kΩ (ACTUAL resistor, jangan diubah)
+
+// Software calibration offset untuk 12V
+// Measured: 12.20V → Actual: 12.17V → Offset: -0.030V
+#define V12_OFFSET_V             -0.030f    // Software calibration offset
 
 // Bawah ambang ini dianggap "tidak ada daya" (noise floor)
 #define VOLT_MIN_VALID_V         0.0f
