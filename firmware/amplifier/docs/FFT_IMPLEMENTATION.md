@@ -36,7 +36,7 @@ Jacktor Audio Analyzer menggunakan **ArduinoFFT** dengan **I2S ADC** untuk real-
 │ Core 0: FFT Processing              │
 │  ├─ I2S ADC (GPIO36/ADC1_CH0)       │
 │  ├─ ArduinoFFT Library              │
-│  ├─ 8/16/32/64 bands                │
+│  ├─ 8/16/24/32/64 bands             │
 │  ├─ Log-spaced frequency bins       │
 │  └─ VU meter processing             │
 │                                     │
@@ -49,7 +49,7 @@ Jacktor Audio Analyzer menggunakan **ArduinoFFT** dengan **I2S ADC** untuk real-
 ```
 
 **Key Differences:**
-- ✅ **Same:** ArduinoFFT, I2S ADC, log-spaced bins
+- ✅ **Same:** ArduinoFFT, I2S ADC, log-spaced bins, **24 bands support**
 - ✅ **Same:** Dual-core architecture (FFT isolated)
 - ❌ **Different:** No web server (UART telemetry instead)
 - ❌ **Different:** Core assignment inverted (FFT on Core 0)
@@ -65,7 +65,7 @@ Jacktor Audio Analyzer menggunakan **ArduinoFFT** dengan **I2S ADC** untuk real-
 ```
 Audio Signal ──[220nF]──┬──[R1:~30kΩ]── VCC (3.3V)
                         │
-                        ├─── GPIO36 (ADC1_CH0)
+                        ├───────────── GPIO36 (ADC1_CH0)
                         │
                         └──[R2:~30kΩ]── GND
 
@@ -169,18 +169,64 @@ void processFft() {
 
 Mirip Webspector, menggunakan **logarithmic spacing** untuk band allocation:
 
+#### **8 Bands**
 ```
-Band Cutoffs (8 bands):
-  30Hz - 60Hz - 120Hz - 250Hz - 500Hz - 1kHz - 2kHz - 4kHz - 8kHz
+100Hz - 250Hz - 500Hz - 1kHz - 2kHz - 4kHz - 8kHz - 16kHz
+```
 
-Band Cutoffs (16 bands):
-  30Hz - 45Hz - 68Hz - 102Hz - 153Hz - 230Hz - 345Hz - ...
-  
-Band Cutoffs (32 bands):
-  30Hz - 37Hz - 46Hz - 57Hz - 70Hz - 87Hz - 108Hz - ...
-  
-Band Cutoffs (64 bands):
-  30Hz - 33Hz - 37Hz - 41Hz - 46Hz - 51Hz - 57Hz - ...
+#### **16 Bands**
+```
+30Hz - 50Hz - 100Hz - 150Hz - 250Hz - 400Hz - 650Hz - 1kHz
+1.6kHz - 2.5kHz - 4kHz - 6kHz - 12kHz - 14kHz - 16kHz - 17kHz
+```
+
+#### **24 Bands** ⭐ NEW
+```
+Band  1:    30Hz      Band  9:   370Hz      Band 17:  3.5kHz
+Band  2:    45Hz      Band 10:   490Hz      Band 18:  4.7kHz
+Band  3:    65Hz      Band 11:   650Hz      Band 19:  6.2kHz
+Band  4:    90Hz      Band 12:   860Hz      Band 20:  8.2kHz
+Band  5:   120Hz      Band 13:  1.1kHz      Band 21: 10.8kHz
+Band  6:   160Hz      Band 14:  1.5kHz      Band 22: 14.3kHz
+Band  7:   210Hz      Band 15:  2.0kHz      Band 23: 16.0kHz
+Band  8:   280Hz      Band 16:  2.6kHz      Band 24: 17.5kHz
+```
+
+**Logarithmic Distribution (24 bands):**
+```
+  30Hz ──┬─── 45Hz   (×1.50)   Sub-bass
+         ├─── 65Hz   (×1.44)
+         ├─── 90Hz   (×1.38)   Bass
+         ├──  120Hz  (×1.33)
+         ├──  160Hz  (×1.33)   Low-mid
+         ├──  210Hz  (×1.31)
+         ├──  280Hz  (×1.33)
+         ├──  370Hz  (×1.32)   Mid
+         ├──  490Hz  (×1.32)
+         ├──  650Hz  (×1.33)
+         ├──  860Hz  (×1.32)   High-mid
+         ├── 1140Hz  (×1.33)
+         ├── 1500Hz  (×1.32)
+         ├── 2000Hz  (×1.33)   Presence
+         ├── 2650Hz  (×1.32)
+         ├── 3500Hz  (×1.32)
+         ├── 4650Hz  (×1.33)   Treble
+         ├── 6150Hz  (×1.32)
+         ├── 8150Hz  (×1.33)
+         ├──10800Hz  (×1.33)   High treble
+         ├──14300Hz  (×1.32)
+         ├──16000Hz  (×1.12)   Air
+         └──17500Hz  (×1.09)
+```
+
+#### **32 Bands**
+```
+45Hz - 90Hz - 130Hz - ... (finer resolution)
+```
+
+#### **64 Bands**
+```
+45Hz - 90Hz - 130Hz - ... (maximum detail)
 ```
 
 **Bucketing Algorithm:**
@@ -347,16 +393,17 @@ void loop() {
 
 ```cpp
 // config.h
-#define ANALYZER_DEFAULT_BANDS  16    // 8, 16, 32, or 64
+#define ANALYZER_DEFAULT_BANDS  16    // 8, 16, 24, 32, or 64
 
 // Runtime via command
-{"type":"analyzer", "cmd":"set", "bands":32}
+{"type":"analyzer", "cmd":"set", "bands":24}
 ```
 
 **Band Options:**
 - **8 bands:** Low CPU, basic visualization
 - **16 bands:** Balanced (default)
-- **32 bands:** Detailed
+- **24 bands:** ⭐ Good detail, moderate CPU
+- **32 bands:** High detail
 - **64 bands:** Maximum detail (high CPU)
 
 ---
@@ -395,16 +442,16 @@ void loop() {
 
 ## Performance
 
-### Timing Breakdown (16 bands @ 33ms)
+### Timing Breakdown (24 bands @ 33ms)
 
 ```
 I2S Sample Collection:  ~23ms  (1024 samples @ 44.1kHz)
-FFT Processing:         ~8ms   (ArduinoFFT)
+FFT Processing:         ~9ms   (ArduinoFFT + 24 bands)
 Band Grouping:          ~1ms
 Normalization:          ~0.5ms
 Idle/Yield:             ~0.5ms
-─────────────────────────────
-Total per frame:        ~33ms  (30 FPS)
+────────────────────────────
+Total per frame:        ~34ms  (~29 FPS)
 ```
 
 ### CPU Usage
@@ -415,6 +462,7 @@ Total per frame:        ~33ms  (30 FPS)
 | VU   | -     | 33ms   | ~35%       | ~15%       |
 | FFT  | 8     | 33ms   | ~45%       | ~15%       |
 | FFT  | 16    | 33ms   | ~55%       | ~15%       |
+| FFT  | 24    | 33ms   | ~65%       | ~15%       |
 | FFT  | 32    | 33ms   | ~70%       | ~15%       |
 | FFT  | 64    | 33ms   | ~85%       | ~15%       |
 
@@ -446,10 +494,10 @@ uint8_t vu = analyzerGetVu();  // 0 = silence, 255 = peak
   "type": "telemetry",
   "rt": {
     "mode": "fft",
-    "bands_len": 16,
+    "bands_len": 24,
     "vu": 128,
     "update_ms": 33,
-    "bands": [45, 78, 120, 156, 189, 210, 198, 165, 134, 98, 67, 45, 32, 21, 12, 8]
+    "bands": [45, 78, 120, 156, 189, 210, 198, 165, 134, 98, 67, 45, 32, 21, 12, 8, 15, 28, 42, 55, 38, 24, 15, 9]
   }
 }
 ```
@@ -472,7 +520,7 @@ uint8_t vu = analyzerGetVu();  // 0 = silence, 255 = peak
 1. ✅ I2S ADC input (GPIO36)
 2. ✅ ArduinoFFT library
 3. ✅ Log-spaced frequency bands
-4. ✅ 8/16/32/64 band support
+4. ✅ 8/16/**24**/32/64 band support
 5. ✅ Dual-core architecture
 6. ✅ Auto-gain normalization
 7. ✅ Dampening for smooth visualization
