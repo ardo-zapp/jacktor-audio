@@ -29,15 +29,15 @@ struct BuzzPatternDef {
 static constexpr uint16_t BIOS_DUTY = 307;
 
 static const BuzzStep PATTERN_BOOT[] = {
-  {880, 90, BUZZER_DUTY_DEFAULT}, {0, 30, 0},
-  {1175, 90, BUZZER_DUTY_DEFAULT}, {0, 30, 0},
-  {1568, 120, BUZZER_DUTY_DEFAULT},
+  {400, 120, BIOS_DUTY}, {0, 20, 0},
+  {600, 120, BIOS_DUTY}, {0, 20, 0},
+  {800, 150, BIOS_DUTY},
 };
 
 static const BuzzStep PATTERN_SHUTDOWN[] = {
-  {1568, 90, BUZZER_DUTY_DEFAULT}, {0, 30, 0},
-  {1175, 90, BUZZER_DUTY_DEFAULT}, {0, 30, 0},
-  {880, 120, BUZZER_DUTY_DEFAULT},
+  {800, 120, BIOS_DUTY}, {0, 20, 0},
+  {600, 120, BIOS_DUTY}, {0, 20, 0},
+  {400, 150, BIOS_DUTY},
 };
 
 static const BuzzStep PATTERN_BT[] = {{1568, 60, BUZZER_DUTY_DEFAULT}, {0, 40, 0}, {2093, 80, BUZZER_DUTY_DEFAULT}};
@@ -61,7 +61,7 @@ static const BuzzPatternDef PATTERNS[] = {
   {PATTERN_CLICK, sizeof(PATTERN_CLICK) / sizeof(BuzzStep), 0, "click", false, false},
   {PATTERN_WARNING, sizeof(PATTERN_WARNING) / sizeof(BuzzStep), 0, "warn", false, false},
   {PATTERN_ERROR, sizeof(PATTERN_ERROR) / sizeof(BuzzStep), 0, "error", true, true},
-  {PATTERN_PROTECT_LONG, sizeof(PATTERN_PROTECT_LONG) / sizeof(BuzzStep), 800, "protect_long", true, true},
+  {PATTERN_PROTECT_LONG, sizeof(PATTERN_PROTECT_LONG) / sizeof(BuzzStep), 0, "protect_long", true, true},
   {PATTERN_SMPS_ERROR, sizeof(PATTERN_SMPS_ERROR) / sizeof(BuzzStep), 0, "smps_error", true, true},
 };
 
