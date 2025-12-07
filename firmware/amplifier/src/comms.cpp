@@ -503,6 +503,22 @@ static void handleRtcSync(uint32_t targetEpoch) {
   forceTel = true;
 }
 
+// Force sync RTC (bypass rate limit)
+static void handleRtcSyncForce(uint32_t targetEpoch) {
+  uint32_t currentEpoch = 0;
+  sensorsGetUnixTime(currentEpoch);
+  
+  if (!sensorsSetUnixTime(targetEpoch)) {
+    sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
+    return;
+  }
+  
+  int32_t offset = (int32_t)((int64_t)targetEpoch - (int64_t)currentEpoch);
+  stateSetLastRtcSync(targetEpoch);
+  sendLogInfoOffset(offset);
+  forceTel = true;
+}
+
 static void handleCmdPower(JsonVariant v) {
   if (!v.is<bool>()) { sendAckErr("power", "invalid"); return; }
   bool on = v.as<bool>();
@@ -611,7 +627,7 @@ static void handleCmdRtcSet(JsonVariant v) {
 static void handleCmdRtcSetEpoch(JsonVariant v) {
   if (!variantIsNumber(v)) { sendAckErr("rtc_set_epoch", "invalid"); return; }
   uint32_t epoch = v.as<uint32_t>();
-  handleRtcSync(epoch);
+  handleRtcSyncForce(epoch);  // Use force sync to bypass rate limit
 }
 
 static void handleCmdBuzz(JsonVariant v) {
