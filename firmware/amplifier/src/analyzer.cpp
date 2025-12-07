@@ -210,7 +210,8 @@ void validateSettings() {
     mode[sizeof(mode) - 1] = '\0';
   }
 
-  if (!(bandsLen == WS_BANDS_8 || bandsLen == WS_BANDS_16 || bandsLen == WS_BANDS_32 || bandsLen == WS_BANDS_64)) {
+  if (!(bandsLen == WS_BANDS_8 || bandsLen == WS_BANDS_16 || bandsLen == WS_BANDS_24 || 
+        bandsLen == WS_BANDS_32 || bandsLen == WS_BANDS_64)) {
     bandsLen = ANALYZER_DEFAULT_BANDS;
   }
 
@@ -295,7 +296,8 @@ void analyzerSetMode(const char *m) {
 }
 
 void analyzerSetBands(uint8_t bands) {
-  if (bands == WS_BANDS_8 || bands == WS_BANDS_16 || bands == WS_BANDS_32 || bands == WS_BANDS_64) {
+  if (bands == WS_BANDS_8 || bands == WS_BANDS_16 || bands == WS_BANDS_24 || 
+      bands == WS_BANDS_32 || bands == WS_BANDS_64) {
     bandsLen = bands;
     WsSetNumberOfBands(bands);
     bandsLen = WsGetBandsLen();

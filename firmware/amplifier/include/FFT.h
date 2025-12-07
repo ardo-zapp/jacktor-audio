@@ -4,16 +4,25 @@
 
 static constexpr uint8_t WS_BANDS_8  = 8;
 static constexpr uint8_t WS_BANDS_16 = 16;
+static constexpr uint8_t WS_BANDS_24 = 24;
 static constexpr uint8_t WS_BANDS_32 = 32;
 static constexpr uint8_t WS_BANDS_64 = 64;
 
 static constexpr uint16_t BandCutoffTable8[WS_BANDS_8] = {
     100, 250, 500, 1000, 2000, 4000, 8000, 16000};
+
 static constexpr uint16_t BandCutoffTable16[WS_BANDS_16] = {
     30, 50, 100, 150, 250, 400, 650, 1000, 1600, 2500, 4000, 6000, 12000, 14000, 16000, 17000};
+
+// 24 bands - logarithmic spacing between 8 and 32
+static constexpr uint16_t BandCutoffTable24[WS_BANDS_24] = {
+    30, 45, 65, 90, 120, 160, 210, 280, 370, 490, 650, 860,
+    1140, 1500, 2000, 2650, 3500, 4650, 6150, 8150, 10800, 14300, 16000, 17500};
+
 static constexpr uint16_t BandCutoffTable32[WS_BANDS_32] = {
     45, 90, 130, 180, 220, 260, 310, 350, 390, 440, 480, 525, 650, 825, 1000, 1300,
     1600, 2050, 2500, 3000, 4000, 5125, 6250, 9125, 12000, 13000, 14000, 15000, 16000, 16500, 17000, 17500};
+
 static constexpr uint16_t BandCutoffTable64[WS_BANDS_64] = {
     45, 90, 130, 180, 220, 260, 310, 350, 390, 440, 480, 525, 565, 610, 650, 690,
     735, 780, 820, 875, 920, 950, 1000, 1050, 1080, 1120, 1170, 1210, 1250, 1300, 1340, 1380,
@@ -30,6 +39,10 @@ static inline void WsSetNumberOfBands(uint8_t bands) {
     case WS_BANDS_8:
       src = BandCutoffTable8;
       len = WS_BANDS_8;
+      break;
+    case WS_BANDS_24:
+      src = BandCutoffTable24;
+      len = WS_BANDS_24;
       break;
     case WS_BANDS_32:
       src = BandCutoffTable32;
