@@ -24,6 +24,7 @@ HardwareSerial espSerial(2);
 static bool powerInitDone = false;
 static uint32_t standbyBuzzAllowUntil = 0;
 static bool bootTonePlayed = false;
+static bool initLogPrinted = false;
 
 static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReason reason);
 
@@ -141,7 +142,11 @@ void appInit() {
   otaInit();
 #endif
 
-  LOGF("[INIT] done.\n");
+  // Print INIT done only once
+  if (!initLogPrinted) {
+    LOGF("[INIT] done.\n");
+    initLogPrinted = true;
+  }
 }
 
 void appTick() {
@@ -154,6 +159,8 @@ void appTick() {
 
   static bool btnInit = false, btnStable = false, btnReported = false;
   static uint32_t btnLastChange = 0;
+
+  static bool lastStandbyState = false;
 
   const uint32_t now = millis();
 
@@ -289,9 +296,15 @@ void appTick() {
     }
   }
 
-  // Force UI to standby when in standby mode (no spam log)
+  // Log standby transition once when entering standby mode
   if (powerStandby) {
+    if (!lastStandbyState) {
+      LOGF("[MAIN] powerStandby=true, forcing UI standby\n");
+      lastStandbyState = true;
+    }
     uiForceStandby();
+  } else {
+    lastStandbyState = false;
   }
 
   const bool sqw = sensorsSqwConsumeTick();
