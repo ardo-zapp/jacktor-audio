@@ -7,14 +7,8 @@
 #include <U8g2lib.h>
 #include <cstring>
 
-// ================= OLED DRIVER =================
-/*
- * SSD1306 128x64 I2C; gunakan default I2C (Wire) dari board.
- * Jika modulmu berbeda, ganti konstruktor di sini.
- */
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0);
 
-// ================= UI STATE =================
 enum class UiScene : uint8_t {
   SPLASH,
   BOOTLOG,
@@ -24,21 +18,15 @@ enum class UiScene : uint8_t {
   WARN
 };
 
-static UiScene gScene = UiScene::SPLASH;
-static char    gClock[9] = "00:00:00";
-static char    gDate[11]  = "1970-01-01";
-
-static bool    gBtMode = false;     // true=BT, false=AUX
-static bool    gSpkBig = SPK_DEFAULT_BIG;
-
-// Bootlog ringkas
-static uint8_t gBootRows = 0;
-static const uint8_t MAX_BOOT_ROWS = 6; // 6 baris muat di 128x64
-
-// Pace refresh
+static UiScene scene = UiScene::SPLASH;
+static char clockStr[9] = "00:00:00";
+static char dateStr[11] = "1970-01-01";
+static bool btMode = false;
+static bool spkBig = SPK_DEFAULT_BIG;
+static uint8_t bootRows = 0;
+static const uint8_t MAX_BOOT_ROWS = 6;
 static uint32_t lastDrawMs = 0;
 
-// ================= SMALL HELPERS =================
 static inline void drawHeader(const char* title) {
   u8g2.setFont(u8g2_font_6x12_tf);
   u8g2.drawStr(0, 10, title);
@@ -49,13 +37,11 @@ static void drawStandbyScreen() {
   u8g2.clearBuffer();
   drawHeader("STANDBY");
 
-  // Jam besar
   u8g2.setFont(u8g2_font_logisoso22_tf);
-  u8g2.drawStr(6, 45, gClock);
+  u8g2.drawStr(6, 45, clockStr);
 
-  // Tanggal kecil di bawah
   u8g2.setFont(u8g2_font_6x12_tf);
-  u8g2.drawStr(0, 62, gDate);
+  u8g2.drawStr(0, 62, dateStr);
 
   u8g2.sendBuffer();
 }
@@ -64,32 +50,29 @@ static void drawRunScreen() {
   u8g2.clearBuffer();
   drawHeader("AMPLIFIER");
 
-  // Jam kecil di header kanan atas
   u8g2.setFont(u8g2_font_6x12_tf);
-  int clockW = u8g2.getStrWidth(gClock);
-  u8g2.drawStr(128 - clockW, 10, gClock);
+  int clockW = u8g2.getStrWidth(clockStr);
+  u8g2.drawStr(128 - clockW, 10, clockStr);
 
-  // Baris status input/speaker
   u8g2.setFont(u8g2_font_6x12_tf);
-  u8g2.drawStr(0, 24, gBtMode ? "IN: BT" : "IN: AUX");
-  u8g2.drawStr(64,24, gSpkBig ? "SPK: BIG" : "SPK: SMALL");
+  u8g2.drawStr(0, 24, btMode ? "IN: BT" : "IN: AUX");
+  u8g2.drawStr(64, 24, spkBig ? "SPK: BIG" : "SPK: SMALL");
 
-  // Tegangan & Suhu
   char vbuf[16], tbuf[16];
   float v = getVoltageInstant();
   float t = getHeatsinkC();
   snprintf(vbuf, sizeof(vbuf), "V: %.1f", v);
   if (isnan(t)) snprintf(tbuf, sizeof(tbuf), "T: --.-C");
-  else          snprintf(tbuf, sizeof(tbuf), "T: %.1fC", t);
+  else snprintf(tbuf, sizeof(tbuf), "T: %.1fC", t);
 
   u8g2.drawStr(0, 38, vbuf);
-  u8g2.drawStr(64,38, tbuf);
+  u8g2.drawStr(64, 38, tbuf);
 
-  // VU meter (mono; tinggi 18 px, lebar 120 px)
-  uint8_t vu = 0; analyzerGetVu(vu);           // 0..255
+  uint8_t vu = 0;
+  analyzerGetVu(vu);
   int vuW = map(vu, 0, 255, 0, 120);
   int vuX = 4, vuY = 60, vuH = 12;
-  u8g2.drawFrame(vuX, vuY - vuH, 120, vuH);    // frame
+  u8g2.drawFrame(vuX, vuY - vuH, 120, vuH);
   if (vuW > 0) u8g2.drawBox(vuX+1, vuY - vuH + 1, vuW, vuH - 2);
 
   if (powerSpkProtectFault()) {
@@ -110,12 +93,12 @@ static void drawSplash(const char* title) {
 }
 
 static void drawBootLogLine(const char* label, bool ok) {
-  if (gBootRows >= MAX_BOOT_ROWS) return;
-  int y = 24 + 10 * gBootRows;
+  if (bootRows >= MAX_BOOT_ROWS) return;
+  int y = 24 + 10 * bootRows;
   u8g2.setFont(u8g2_font_6x12_tf);
   u8g2.drawStr(0, y, label ? label : "?");
   u8g2.drawStr(110, y, ok ? "OK" : "FAIL");
-  gBootRows++;
+  bootRows++;
 }
 
 static void drawError(const char* msg) {
@@ -134,73 +117,63 @@ static void drawWarning(const char* msg) {
   u8g2.sendBuffer();
 }
 
-// ================= PUBLIC API =================
 void uiInit() {
   u8g2.begin();
   u8g2.setPowerSave(0);
-  gScene = powerIsOn() ? UiScene::RUN : UiScene::STANDBY;
+  scene = powerIsOn() ? UiScene::RUN : UiScene::STANDBY;
   lastDrawMs = 0;
 }
 
 void uiShowBoot(uint32_t holdMs) {
-  gScene = UiScene::SPLASH;
+  scene = UiScene::SPLASH;
   drawSplash(FW_NAME);
-  if (holdMs > 0) {
-    delay(holdMs);
-  }
+  if (holdMs > 0) delay(holdMs);
 }
 
 void uiShowFactoryReset(const char* subtitle, uint32_t holdMs) {
-  gScene = UiScene::WARN;
+  scene = UiScene::WARN;
   u8g2.clearBuffer();
   drawHeader("FACTORY RESET");
   u8g2.setFont(u8g2_font_6x12_tf);
   const char *line = (subtitle && subtitle[0]) ? subtitle : "Menghapus NVS...";
   u8g2.drawStr(0, 32, line);
   u8g2.sendBuffer();
-  if (holdMs > 0) {
-    delay(holdMs);
-  }
+  if (holdMs > 0) delay(holdMs);
 }
 
 void uiTick(uint32_t now) {
-  // 30 FPS max
   if (now - lastDrawMs < 33) return;
   lastDrawMs = now;
 
   const bool standby = powerIsStandby();
-  const bool on      = powerIsOn();
+  const bool on = powerIsOn();
 
-  // Transisi scene berdasar power state
   if (standby) {
-    // Jangan timpa WARN/ERROR, biarkan dialog atau error tetap tampil
-    if (gScene != UiScene::STANDBY &&
-        gScene != UiScene::WARN &&
-        gScene != UiScene::ERROR) {
-      gScene = UiScene::STANDBY;
-        }
-  } else if (on && (gScene == UiScene::STANDBY || gScene == UiScene::SPLASH)) {
-    gScene = UiScene::RUN;
+    if (scene != UiScene::STANDBY && scene != UiScene::WARN && scene != UiScene::ERROR) {
+      scene = UiScene::STANDBY;
+    }
+  } else if (on && (scene == UiScene::STANDBY || scene == UiScene::SPLASH)) {
+    scene = UiScene::RUN;
   }
 
-  switch (gScene) {
-  case UiScene::SPLASH:   /* no-op */ break;
-  case UiScene::BOOTLOG:  u8g2.sendBuffer();      break;
-  case UiScene::STANDBY:  drawStandbyScreen();    break;
-  case UiScene::RUN:      drawRunScreen();        break;
-  case UiScene::ERROR:    /* static error view */ break;
-  case UiScene::WARN:     /* static warn view  */ break;
+  switch (scene) {
+    case UiScene::SPLASH: break;
+    case UiScene::BOOTLOG: u8g2.sendBuffer(); break;
+    case UiScene::STANDBY: drawStandbyScreen(); break;
+    case UiScene::RUN: drawRunScreen(); break;
+    case UiScene::ERROR: break;
+    case UiScene::WARN: break;
   }
 }
 
 void uiShowSplash(const char* title) {
-  gScene = UiScene::SPLASH;
+  scene = UiScene::SPLASH;
   drawSplash(title);
 }
 
 void uiBootLogLine(const char* label, bool ok) {
-  if (gScene != UiScene::BOOTLOG) {
-    gScene = UiScene::BOOTLOG;
+  if (scene != UiScene::BOOTLOG) {
+    scene = UiScene::BOOTLOG;
     u8g2.clearBuffer();
     drawHeader("BOOT LOG");
   }
@@ -209,39 +182,39 @@ void uiBootLogLine(const char* label, bool ok) {
 }
 
 void uiShowError(const char* msg) {
-  gScene = UiScene::ERROR;
+  scene = UiScene::ERROR;
   drawError(msg);
 }
 
 void uiShowWarning(const char* msg) {
-  gScene = UiScene::WARN;
+  scene = UiScene::WARN;
   drawWarning(msg);
 }
 
 void uiClearErrorToRun() {
-  if (gScene == UiScene::ERROR || gScene == UiScene::WARN) {
-    gScene = UiScene::RUN;
+  if (scene == UiScene::ERROR || scene == UiScene::WARN) {
+    scene = UiScene::RUN;
   }
 }
 
 void uiShowStandby() {
-  gScene = UiScene::STANDBY;
+  scene = UiScene::STANDBY;
   drawStandbyScreen();
 }
 
 void uiSetClock(const char* hhmmss) {
   if (!hhmmss) return;
-  strncpy(gClock, hhmmss, sizeof(gClock)-1);
-  gClock[sizeof(gClock)-1] = '\0';
+  strncpy(clockStr, hhmmss, sizeof(clockStr)-1);
+  clockStr[sizeof(clockStr)-1] = '\0';
 }
 
 void uiSetDate(const char* yyyymmdd) {
   if (!yyyymmdd) return;
-  strncpy(gDate, yyyymmdd, sizeof(gDate)-1);
-  gDate[sizeof(gDate)-1] = '\0';
+  strncpy(dateStr, yyyymmdd, sizeof(dateStr)-1);
+  dateStr[sizeof(dateStr)-1] = '\0';
 }
 
-void uiSetInputStatus(bool btMode, bool speakerBig) {
-  gBtMode = btMode;
-  gSpkBig = speakerBig;
+void uiSetInputStatus(bool bt, bool speakerBig) {
+  btMode = bt;
+  spkBig = speakerBig;
 }
