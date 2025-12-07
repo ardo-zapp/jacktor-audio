@@ -160,7 +160,9 @@ class ESP32Monitor:
                 if duty < 0 or duty > 1023:
                     print("[ERROR] Duty must be 0-1023")
                     return
-                self.send_command({"fan_duty": duty})
+                # ✅ FIX: Auto set fan mode to CUSTOM when setting duty
+                self.send_command({"fan_mode": "custom", "fan_duty": duty})
+                print(f"[INFO] Set fan to CUSTOM mode with duty {duty}")
             except ValueError:
                 print("[ERROR] Invalid duty value")
         elif action == "fan-min":
@@ -431,7 +433,7 @@ class ESP32Monitor:
         print("Fan Control:")
         print("  fan-auto                    Fan auto mode")
         print("  fan-custom                  Fan custom mode")
-        print("  fan-duty <0-1023>           Set fan duty cycle")
+        print("  fan-duty <0-1023>           Set fan duty (auto switches to custom)")
         print()
 
         print("SMPS Control:")
@@ -481,7 +483,7 @@ class ESP32Monitor:
 
         print("Examples:")
         print("  spk-big")
-        print("  fan-duty 800")
+        print("  fan-duty 800               # Auto switches to custom mode")
         print("  buzz 1000 200")
         print("  buzz-melody")
         print("  ana-bands 24")
@@ -518,12 +520,18 @@ class ESP32Monitor:
             print("  fan-auto           - Automatic fan control based on temperature")
             print("  fan-custom         - Manual fan control mode")
             print("  fan-duty <value>   - Set PWM duty cycle (0-1023)")
+            print("                       Automatically switches to CUSTOM mode")
             print()
             print("Examples:")
             print("  fan-auto")
-            print("  fan-custom")
-            print("  fan-duty 512       # 50% duty")
+            print("  fan-duty 512       # 50% duty (auto switches to custom)")
             print("  fan-duty 800       # ~78% duty")
+            print()
+            print("Temperature curve (AUTO mode):")
+            print("  < 40°C : duty 400  (39% - minimum)")
+            print("  40-60°C: 400→650   (linear interpolation)")
+            print("  60-80°C: 650→1023  (linear interpolation)")
+            print("  > 80°C : duty 1023 (100% - maximum)")
             print()
             print("Note: Fan can be controlled even when power is OFF (standby)")
             print()

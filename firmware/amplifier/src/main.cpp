@@ -251,10 +251,11 @@ void appTick() {
       buzzPattern(BuzzPatternId::PROTECT_LONG);
       lastSpkFault = true;
     }
+
     if (!protectFault && lastSpkFault) {
       buzzStop();
       lastSpkFault = false;
-      if (!uiIsErrorActive()) uiClearErrorToRun();
+      uiClearErrorToRun();
     }
 
     if (inSoftstart) {

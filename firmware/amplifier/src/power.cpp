@@ -98,9 +98,9 @@ static uint16_t fanCurveAuto(float tC) {
     return FAN_AUTO_D1;
   }
 
-  // Below T1: constant duty D1
-  if (tC <= FAN_AUTO_T1_C) {
-    return FAN_AUTO_D1;
+  // Below T1 → FAN duty 250 (gentle airflow when cool)
+  if (tC < FAN_AUTO_T1_C) {
+    return FAN_AUTO_MIN;
   }
 
   // Between T1 and T2: linear interpolation D1 -> D2
@@ -331,10 +331,15 @@ void powerInit() {
 }
 
 void powerTick(const uint32_t now) {
-  // FAN: Always run fanTick(), even in standby (allows manual control and proper auto mode)
+  // FAN: Run fanTick() to calculate duty based on mode
   fanTick();
 
-  // Override fan to 0 if safe mode active
+  // Override: Turn off fan when in STANDBY
+  if (!powerIsOn()) {
+    fanWriteDuty(0);
+  }
+
+  // Override: Safe mode always turns off fan
   if (safeModeActive) {
     fanWriteDuty(0);
   }

@@ -24,7 +24,7 @@
 
 //  Firmware meta
 // ============================================================================
-#define FW_NAME                  "Jacktor Audio"
+#define FW_NAME                  "JACKTOR AUDIO"
 #define FW_VERSION               "amp-1.0.0"
 
 
@@ -225,6 +225,7 @@
 #define FAN_AUTO_T1_C            40.0f
 #define FAN_AUTO_T2_C            60.0f
 #define FAN_AUTO_T3_C            80.0f
+#define FAN_AUTO_MIN             250
 #define FAN_AUTO_D1              400
 #define FAN_AUTO_D2              650
 #define FAN_AUTO_D3              1023
