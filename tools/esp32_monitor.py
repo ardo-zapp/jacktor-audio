@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+import os
 
 class ESP32Monitor:
     def __init__(self, port="/dev/ttyUSB0", baud=921600):
@@ -13,11 +14,30 @@ class ESP32Monitor:
         self.ser = None
         self.running = False
 
+        # Status cache untuk header realtime
+        self.status = {
+            'fw_ver': 'N/A',
+            'time': 'N/A',
+            'power': 'OFF',
+            'voltage': 0.0,
+            'v12': 0.0,
+            'temp': 0.0,
+            'input': 'aux',
+            'speaker': 'small',
+            'fan_mode': 'auto',
+            'fan_duty': 0,
+            'vu': 0,
+            'errors': []
+        }
+        self.header_lines = 8  # Jumlah baris header
+        self.last_header_update = 0
+        self.header_update_interval = 0.5  # Update setiap 500ms
+
     def connect(self):
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=1)
             time.sleep(0.5)
-            print(f"[CONNECTED] {self.port} @ {self.baud} baud\n")
+            self.init_screen()
             return True
         except Exception as e:
             print(f"[ERROR] Connection failed: {e}")
@@ -27,6 +47,151 @@ class ESP32Monitor:
         if self.ser and self.ser.is_open:
             self.ser.close()
             print("\n[DISCONNECTED]")
+
+    def init_screen(self):
+        """Initialize screen with header space"""
+        # Clear screen
+        sys.stdout.write("\033[2J")
+        sys.stdout.flush()
+
+        # Draw initial header
+        self.draw_header_initial()
+
+        # Connection message
+        sys.stdout.write(f"[CONNECTED] {self.port} @ {self.baud} baud\n")
+        sys.stdout.write("Type 'help' for commands. Status updates in header.\n\n")
+        sys.stdout.flush()
+
+    def draw_header_initial(self):
+        """Draw header without save/restore cursor (for clear/init)"""
+        # Move to top-left (1,1)
+        sys.stdout.write("\033[H")
+
+        # Build header content
+        pwr_color = "\033[92m" if self.status['power'] == 'ON' else "\033[90m"
+        temp_str = f"{self.status['temp']:.1f}°C" if self.status['temp'] > 0 else "N/A"
+        v_str = f"{self.status['voltage']:.1f}V" if self.status['voltage'] > 0 else "N/A"
+        v12_str = f"{self.status['v12']:.2f}V" if self.status['v12'] > 0 else "N/A"
+
+        # VU meter bar
+        vu_width = int(self.status['vu'] / 255.0 * 60)
+        vu_bar = "█" * vu_width + "░" * (60 - vu_width)
+
+        # Error display
+        if self.status['errors']:
+            err_str = ", ".join(self.status['errors'])
+            status_color = "\033[91m"
+            status_text = f"ERROR: {err_str}"
+        else:
+            status_color = "\033[92m"
+            status_text = "OK"
+
+        # Draw header (clear each line first)
+        header = [
+            "=" * 80,
+            f" Jacktor Audio - FW: {self.status['fw_ver']:<20} Time: {self.status['time']}",
+            "=" * 80,
+            f" Power: {pwr_color}{self.status['power']:<3}\033[0m | Input: {self.status['input'].upper():<3} | Speaker: {self.status['speaker'].upper():<5} | Voltage: {v_str:<8} | 12V: {v12_str}",
+            f" Temp: {temp_str:<8} | Fan: {self.status['fan_mode']:<6} (duty: {self.status['fan_duty']:<4})",
+            f" VU: [{vu_bar}] {self.status['vu']:>3}/255",
+            f" Status: {status_color}{status_text}\033[0m",
+            "=" * 80,
+        ]
+
+        for line in header:
+            sys.stdout.write(f"\033[K{line}\n")
+
+        # Add one blank line after header
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    def update_header(self):
+        """Update header in-place (top of screen)"""
+        now = time.time()
+        if now - self.last_header_update < self.header_update_interval:
+            return
+        self.last_header_update = now
+
+        # Save current cursor position
+        sys.stdout.write("\033[s")
+
+        # Move to top-left (1,1)
+        sys.stdout.write("\033[H")
+
+        # Build header content
+        pwr_color = "\033[92m" if self.status['power'] == 'ON' else "\033[90m"
+        temp_str = f"{self.status['temp']:.1f}°C" if self.status['temp'] > 0 else "N/A"
+        v_str = f"{self.status['voltage']:.1f}V" if self.status['voltage'] > 0 else "N/A"
+        v12_str = f"{self.status['v12']:.2f}V" if self.status['v12'] > 0 else "N/A"
+
+        # VU meter bar
+        vu_width = int(self.status['vu'] / 255.0 * 60)
+        vu_bar = "█" * vu_width + "░" * (60 - vu_width)
+
+        # Error display
+        if self.status['errors']:
+            err_str = ", ".join(self.status['errors'])
+            status_color = "\033[91m"
+            status_text = f"ERROR: {err_str}"
+        else:
+            status_color = "\033[92m"
+            status_text = "OK"
+
+        # Draw header (clear each line first)
+        header = [
+            "=" * 80,
+            f" Jacktor Audio - FW: {self.status['fw_ver']:<20} Time: {self.status['time']}",
+            "=" * 80,
+            f" Power: {pwr_color}{self.status['power']:<3}\033[0m | Input: {self.status['input'].upper():<3} | Speaker: {self.status['speaker'].upper():<5} | Voltage: {v_str:<8} | 12V: {v12_str}",
+            f" Temp: {temp_str:<8} | Fan: {self.status['fan_mode']:<6} (duty: {self.status['fan_duty']:<4})",
+            f" VU: [{vu_bar}] {self.status['vu']:>3}/255",
+            f" Status: {status_color}{status_text}\033[0m",
+            "=" * 80,
+        ]
+
+        for line in header:
+            # Clear line and write
+            sys.stdout.write(f"\033[K{line}\n")
+
+        # Restore cursor position
+        sys.stdout.write("\033[u")
+        sys.stdout.flush()
+
+    def update_status(self, data):
+        """Update status cache from telemetry"""
+        if 'hz1' in data:
+            hz1 = data['hz1']
+            self.status['fw_ver'] = hz1.get('fw_ver', 'N/A')
+            self.status['time'] = hz1.get('time', 'N/A')
+            self.status['voltage'] = hz1.get('smps', {}).get('v', 0.0)
+            self.status['v12'] = hz1.get('v12', 0.0)
+            self.status['temp'] = hz1.get('heat_c', 0.0) or 0.0
+
+            states = hz1.get('states', {})
+            self.status['power'] = 'ON' if states.get('on', False) else 'OFF'
+
+            inputs = hz1.get('inputs', {})
+            self.status['input'] = 'bt' if inputs.get('bt', False) else 'aux'
+            self.status['speaker'] = inputs.get('speaker', 'small')
+
+            nvs = hz1.get('nvs', {})
+            self.status['fan_mode'] = nvs.get('fan_mode_str', 'auto')
+            self.status['fan_duty'] = nvs.get('fan_duty', 0)
+
+            self.status['vu'] = hz1.get('vu', 0)
+            self.status['errors'] = hz1.get('errors', [])
+
+            # Update header
+            self.update_header()
+
+        elif 'rt' in data:
+            # Realtime telemetry (VU meter)
+            rt = data['rt']
+            self.status['vu'] = rt.get('vu', 0)
+            self.status['input'] = rt.get('input', 'aux')
+
+            # Update header untuk VU meter
+            self.update_header()
 
     def send(self, json_str):
         """Send raw JSON"""
@@ -88,17 +253,16 @@ class ESP32Monitor:
                                     print(f"[{ts}] ACK [ERR] {changed}: {error}")
 
                             elif msg_type == 'telemetry':
-                                # Don't print full telemetry, just summary
-                                if 'hz1' in data:
-                                    hz1 = data['hz1']
-                                    rtc_time = hz1.get('time', 'N/A')
-                                    fw_ver = hz1.get('fw_ver', 'N/A')
-                                    states = hz1.get('states', {})
-                                    on = states.get('on', False)
-                                    print(f"[{ts}] TELEM: FW={fw_ver} | Time={rtc_time} | Power={'ON' if on else 'OFF'}")
-                                elif 'rt' in data:
-                                    # Realtime telemetry - skip printing
-                                    pass
+                                # Update header silently
+                                self.update_status(data)
+
+                            elif msg_type == 'ota':
+                                evt = data.get('evt', '')
+                                print(f"[{ts}] OTA: {evt}")
+
+                            elif msg_type == 'analyzer':
+                                evt = data.get('evt', '')
+                                print(f"[{ts}] ANALYZER: {evt}")
 
                             else:
                                 print(f"[{ts}] RX <- {line}")
@@ -160,7 +324,6 @@ class ESP32Monitor:
                 if duty < 0 or duty > 1023:
                     print("[ERROR] Duty must be 0-1023")
                     return
-                # ✅ FIX: Auto set fan mode to CUSTOM when setting duty
                 self.send_command({"fan_mode": "custom", "fan_duty": duty})
                 print(f"[INFO] Set fan to CUSTOM mode with duty {duty}")
             except ValueError:
@@ -390,231 +553,93 @@ class ESP32Monitor:
             except json.JSONDecodeError as e:
                 print(f"[ERROR] Invalid JSON: {e}")
 
+        # Clear command (clear entire terminal and redraw header)
+        elif action == "clear":
+            # Clear entire screen
+            sys.stdout.write("\033[2J")
+            sys.stdout.flush()
+
+            # Draw header at top (no save/restore cursor)
+            self.draw_header_initial()
+
         # Help
         elif action == "help":
-            if args:
-                self.show_help_category(args[0])
-            else:
-                self.show_help()
+            print("\n=== ESP32 Monitor - Command Reference ===\n")
+
+            print("Power Control:")
+            print("  pwr-on                      Power ON")
+            print("  pwr-off                     Power OFF (standby)")
+            print()
+
+            print("Speaker Control:")
+            print("  spk-big                     Switch to BIG speaker")
+            print("  spk-small                   Switch to SMALL speaker")
+            print("  spk-on                      Speaker power ON")
+            print("  spk-off                     Speaker power OFF")
+            print()
+
+            print("Bluetooth:")
+            print("  bt-on                       Bluetooth ON")
+            print("  bt-off                      Bluetooth OFF")
+            print()
+
+            print("Fan Control:")
+            print("  fan-auto                    Fan auto mode")
+            print("  fan-custom                  Fan custom mode")
+            print("  fan-duty <0-1023>           Set fan duty (auto switches to custom)")
+            print()
+
+            print("SMPS Control:")
+            print("  smps-on                     Enable SMPS")
+            print("  smps-off                    Bypass SMPS")
+            print("  smps-cutoff <voltage>       Set SMPS cutoff voltage")
+            print()
+
+            print("Buzzer Control:")
+            print("  buzz <freq> <dur> [duty]    Custom buzzer tone")
+            print("  buzz-click                  Quick click")
+            print("  buzz-beep                   Standard beep")
+            print("  buzz-low/mid/high           Tone presets")
+            print("  buzz-error                  Error pattern")
+            print("  buzz-melody                 Simple melody")
+            print("  buzz-test                   Test all tones")
+            print()
+
+            print("Analyzer Control:")
+            print("  ana-get                     Get analyzer config")
+            print("  ana-mode <fft|vu>           Set analyzer mode")
+            print("  ana-bands <8-64>            Set FFT bands")
+            print("  ana-update <ms>             Set update interval")
+            print()
+
+            print("RTC Control:")
+            print("  rtc-get                     Get RTC time (from telemetry)")
+            print("  rtc-sync                    Sync RTC with system local time")
+            print("  rtc-sync-force              Force sync (bypass 24h rate limit)")
+            print("  rtc-sync-force <ISO8601>    Force sync with custom time")
+            print()
+
+            print("System:")
+            print("  nvs-reset                   Reset NVS to defaults")
+            print("  reset                       Factory reset")
+            print("  status                      Request status")
+            print("  version                     Show version")
+            print()
+
+            print("Utility:")
+            print("  json <json_string>          Send raw JSON")
+            print("  clear                       Clear screen and redraw header")
+            print("  help                        Show this help")
+            print("  exit / quit / q             Quit monitor")
+            print()
 
         # Exit
         elif action in ["exit", "quit", "q"]:
             return "exit"
 
-        # Clear screen
-        elif action == "clear":
-            print("\033[2J\033[H", end="")
-
         else:
             print(f"[ERROR] Unknown command: {action}")
             print("        Type 'help' for available commands")
-
-    def show_help(self):
-        """Show help"""
-        print("\n=== ESP32 Monitor - Command Reference ===\n")
-
-        print("Power Control:")
-        print("  pwr-on                      Power ON")
-        print("  pwr-off                     Power OFF (standby)")
-        print()
-
-        print("Speaker Control:")
-        print("  spk-big                     Switch to BIG speaker")
-        print("  spk-small                   Switch to SMALL speaker")
-        print("  spk-on                      Speaker power ON")
-        print("  spk-off                     Speaker power OFF")
-        print()
-
-        print("Bluetooth:")
-        print("  bt-on                       Bluetooth ON")
-        print("  bt-off                      Bluetooth OFF")
-        print()
-
-        print("Fan Control:")
-        print("  fan-auto                    Fan auto mode")
-        print("  fan-custom                  Fan custom mode")
-        print("  fan-duty <0-1023>           Set fan duty (auto switches to custom)")
-        print()
-
-        print("SMPS Control:")
-        print("  smps-on                     Enable SMPS")
-        print("  smps-off                    Bypass SMPS")
-        print("  smps-cutoff <voltage>       Set SMPS cutoff voltage")
-        print()
-
-        print("Buzzer Control:")
-        print("  buzz <freq> <dur> [duty]    Custom buzzer tone")
-        print("  buzz-click                  Quick click")
-        print("  buzz-beep                   Standard beep")
-        print("  buzz-low/mid/high           Tone presets")
-        print("  buzz-error                  Error pattern")
-        print("  buzz-melody                 Simple melody")
-        print("  buzz-test                   Test all tones")
-        print()
-
-        print("Analyzer Control:")
-        print("  ana-get                     Get analyzer config")
-        print("  ana-mode <fft|vu>           Set analyzer mode")
-        print("  ana-bands <8-64>            Set FFT bands")
-        print("  ana-update <ms>             Set update interval")
-        print()
-
-        print("RTC Control:")
-        print("  rtc-get                     Get RTC time (from telemetry)")
-        print("  rtc-sync                    Sync RTC with system local time")
-        print("  rtc-sync-force              Force sync (bypass 24h rate limit)")
-        print("  rtc-sync-force <ISO8601>    Force sync with custom time")
-        print()
-
-        print("System:")
-        print("  nvs-reset                   Reset NVS to defaults")
-        print("  reset                       Factory reset")
-        print("  status                      Request status")
-        print("  version                     Show version")
-        print()
-
-        print("Utility:")
-        print("  json <json_string>          Send raw JSON")
-        print("  clear                       Clear screen")
-        print("  help                        Show this help")
-        print("  help <category>             Show category help")
-        print("  exit / quit / q             Quit monitor")
-        print()
-
-        print("Examples:")
-        print("  spk-big")
-        print("  fan-duty 800               # Auto switches to custom mode")
-        print("  buzz 1000 200")
-        print("  buzz-melody")
-        print("  ana-bands 24")
-        print("  rtc-sync")
-        print("  rtc-sync-force")
-        print("  bt-on")
-        print()
-
-        print("Categories: power, speaker, fan, buzzer, analyzer, smps, rtc")
-        print()
-
-    def show_help_category(self, category):
-        """Show category-specific help"""
-        cat = category.lower()
-
-        if cat == "power":
-            print("\n=== Power Control ===")
-            print("  pwr-on      - Turn amplifier ON")
-            print("  pwr-off     - Turn amplifier OFF (standby mode)")
-            print()
-
-        elif cat == "speaker":
-            print("\n=== Speaker Control ===")
-            print("  spk-big     - Switch audio output to BIG speaker")
-            print("  spk-small   - Switch audio output to SMALL speaker")
-            print("  spk-on      - Enable speaker power relay")
-            print("  spk-off     - Disable speaker power relay")
-            print()
-            print("Note: Speaker selection is independent from power relay")
-            print()
-
-        elif cat == "fan":
-            print("\n=== Fan Control ===")
-            print("  fan-auto           - Automatic fan control based on temperature")
-            print("  fan-custom         - Manual fan control mode")
-            print("  fan-duty <value>   - Set PWM duty cycle (0-1023)")
-            print("                       Automatically switches to CUSTOM mode")
-            print()
-            print("Examples:")
-            print("  fan-auto")
-            print("  fan-duty 512       # 50% duty (auto switches to custom)")
-            print("  fan-duty 800       # ~78% duty")
-            print()
-            print("Temperature curve (AUTO mode):")
-            print("  < 40°C : duty 400  (39% - minimum)")
-            print("  40-60°C: 400→650   (linear interpolation)")
-            print("  60-80°C: 650→1023  (linear interpolation)")
-            print("  > 80°C : duty 1023 (100% - maximum)")
-            print()
-            print("Note: Fan can be controlled even when power is OFF (standby)")
-            print()
-
-        elif cat == "buzzer":
-            print("\n=== Buzzer Control ===")
-            print("  buzz <freq> <dur> [duty]  - Play custom tone")
-            print("    freq  : Frequency in Hz (100-5000)")
-            print("    dur   : Duration in milliseconds")
-            print("    duty  : PWM duty cycle 0-1023 (default: 512)")
-            print()
-            print("Presets:")
-            print("  buzz-click      - Quick UI click (1975Hz, 60ms)")
-            print("  buzz-beep       - Standard beep (1000Hz, 200ms)")
-            print("  buzz-low        - Low tone (440Hz, 300ms)")
-            print("  buzz-mid        - Mid tone (880Hz, 300ms)")
-            print("  buzz-high       - High tone (1760Hz, 300ms)")
-            print("  buzz-error      - Error pattern (3 short beeps)")
-            print("  buzz-warning    - Warning beep (high pitch)")
-            print("  buzz-melody     - Simple melody (C-D-E-F)")
-            print("  buzz-stop       - Stop any playing sound")
-            print("  buzz-test       - Test all tone presets")
-            print()
-            print("Examples:")
-            print("  buzz 1000 200           # 1kHz beep for 200ms")
-            print("  buzz 440 500 256        # A4 note, 500ms, lower volume")
-            print("  buzz 2000 100           # High pitch short beep")
-            print("  buzz-melody             # Play C-D-E-F melody")
-            print()
-
-        elif cat == "analyzer":
-            print("\n=== Analyzer Control ===")
-            print("  ana-get              - Get current analyzer configuration")
-            print("  ana-mode <fft|vu>    - Set mode (FFT spectrum or VU meter)")
-            print("  ana-bands <8-64>     - Set number of FFT bands")
-            print("  ana-update <ms>      - Set update interval in milliseconds")
-            print()
-            print("Valid band counts: 8, 16, 24, 32, 48, 64")
-            print("Recommended update: 33ms (30 Hz) or 50ms (20 Hz)")
-            print()
-            print("Examples:")
-            print("  ana-mode fft")
-            print("  ana-bands 24")
-            print("  ana-update 33")
-            print()
-
-        elif cat == "smps":
-            print("\n=== SMPS Control ===")
-            print("  smps-on              - Enable SMPS (switching power supply)")
-            print("  smps-off             - Bypass SMPS (use direct power)")
-            print("  smps-cutoff <volts>  - Set low voltage cutoff threshold")
-            print()
-            print("Examples:")
-            print("  smps-on")
-            print("  smps-cutoff 24.5")
-            print()
-
-        elif cat == "rtc":
-            print("\n=== RTC Control ===")
-            print("  rtc-get                  - Get current RTC time (from telemetry)")
-            print("  rtc-sync                 - Sync RTC with system local time")
-            print("  rtc-sync-force           - Force sync (bypass 24h rate limit)")
-            print("  rtc-sync-force <ISO8601> - Force sync with custom time")
-            print()
-            print("Time Format: YYYY-MM-DDTHH:MM:SS (local time WIB)")
-            print()
-            print("Examples:")
-            print("  rtc-sync                          # Normal sync (rate-limited)")
-            print("  rtc-sync-force                    # Force sync with PC time")
-            print("  rtc-sync-force 2025-12-07T10:26:00 # Force sync custom time")
-            print()
-            print("Notes:")
-            print("- rtc-sync: Rate-limited (24h interval, offset >2s)")
-            print("- rtc-sync-force: Bypass rate limit using epoch method")
-            print("- RTC stores LOCAL time (WIB/Indonesia)")
-            print("- Auto sync uses PC's current local time")
-            print("- Check telemetry 'hz1.time' field for current RTC time")
-            print()
-
-        else:
-            print(f"\n[ERROR] Unknown category: {category}")
-            print("Available categories: power, speaker, fan, buzzer, analyzer, smps, rtc")
-            print()
 
     def run(self):
         """Run monitor"""
@@ -624,10 +649,6 @@ class ESP32Monitor:
         self.running = True
         reader = threading.Thread(target=self.read_loop, daemon=True)
         reader.start()
-
-        print("ESP32 Monitor + Commander")
-        print("Type 'help' for available commands")
-        print()
 
         try:
             while True:

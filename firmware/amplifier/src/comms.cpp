@@ -35,12 +35,13 @@ static inline void ledActivityTick(uint32_t now) {
   if (now - lastRxBlink > 60 && now - lastTxBlink > 60) digitalWrite(LED_UART_PIN, LOW);
 }
 
-// Send telemetry to UART2 ONLY (Panel)
+// Send telemetry to UART2 AND USB Serial
 template <typename TDoc>
 static void sendTelemetry(const TDoc &doc) {
   String out;
   serializeJson(doc, out);
-  linkSerial.println(out);  // UART2 only
+  linkSerial.println(out);   // UART2 (Panel)
+  debugSerial.println(out);  // USB Serial
   ledTxPulse();
 }
 
