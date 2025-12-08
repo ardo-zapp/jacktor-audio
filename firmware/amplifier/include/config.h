@@ -47,7 +47,7 @@
 #define ANALYZER_UPDATE_MS            33
 #define ANALYZER_MIN_UPDATE_MS        16
 #define ANALYZER_MAX_UPDATE_MS        100
-#define WS_NOISE_THRESHOLD            1000
+#define WS_NOISE_THRESHOLD            0
 #define WS_GAIN_DAMPEN                2
 
 #define TELEM_REALTIME_ENABLE         1
@@ -266,10 +266,8 @@
 //  - Fault jika LED padam terus ≥ SPK_PROTECT_FAULT_MS
 // ============================================================================
 #define SPK_PROTECT_LED_PIN      39
-#define SPK_PROTECT_FAULT_MS     1500
-#define SPK_PROTECT_LED_PIN      39
+#define SPK_PROTECT_FAULT_MS     2000
 #define SPK_PROTECT_ACTIVE_HIGH  0
-#define SPK_PROTECT_FAULT_MS     1500
 #define SPK_PROTECT_ARM_MS       5000
 
 

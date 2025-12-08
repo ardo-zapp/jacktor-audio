@@ -823,20 +823,28 @@ void commsInit() {
   pinMode(LED_UART_PIN, OUTPUT);
   digitalWrite(LED_UART_PIN, LOW);
 
+  // USB CDC (debugSerial)
+  // =====================
+  debugSerial.setRxBufferSize(2048);
+  debugSerial.setTxBufferSize(2048);
   debugSerial.begin(SERIAL_BAUD_USB);
-  debugSerial.println("[DEBUG] USB Serial initialized (921600 baud)");
-  
+  debugSerial.println("[DEBUG] USB Serial initialized (921600 baud, 2KB buffer)");
+
+  // UART2 ke panel (linkSerial)
+  // ===========================
+  linkSerial.setRxBufferSize(2048);
+  linkSerial.setTxBufferSize(2048);
   linkSerial.begin(SERIAL_BAUD_LINK, SERIAL_8N1, UART2_RX_PIN, UART2_TX_PIN);
-  
+
   rxLine.reserve(4096);
   lastRtMs = 0;
   lastHz1Ms = 0;
   otaReady = true;
   forceTel = true;
-  
-  sendDebugLog("[DEBUG] UART2 initialized (921600 baud)");
-  
-  // Send features snapshot once at boot
+
+  sendDebugLog("[DEBUG] UART2 initialized (921600 baud, 2KB buffer)");
+
+  // Kirim snapshot features sekali saat boot
   delay(100);
   sendFeaturesSnapshot();
 }
