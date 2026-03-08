@@ -38,6 +38,9 @@ void sensorsInit() {
   ads.setGain(GAIN_ONE);
 
   dallas.begin();
+  // Set DALLAS temperature sensor ke non-blocking mode
+  // untuk mencegah keterlambatan / stall pada main loop
+  dallas.setWaitForConversion(false);
 
   rtcReady = rtc.begin(&Wire);
   if (rtcReady) {
@@ -60,6 +63,9 @@ void sensorsInit() {
   lastTempMs = 0;
   rtcTempC = NAN;
   rtcSqwTick = false;
+
+  // Inisiasi konversi suhu pertama agar pembacaan pertama nanti tidak default (85C)
+  dallas.requestTemperatures();
 }
 
 void sensorsTick(uint32_t now) {
@@ -81,8 +87,13 @@ void sensorsTick(uint32_t now) {
 
   if (now - lastTempMs >= 1000) {
     lastTempMs = now;
-    dallas.requestTemperatures();
+
+    // Karena non-blocking (setWaitForConversion=false),
+    // getTempCByIndex(0) ini akan mengambil nilai *hasil* request sebelumnya,
+    // yang tidak mem-blokir RTOS loop utama (mencegah lag di PWM/komunikasi).
     float t = dallas.getTempCByIndex(0);
+    dallas.requestTemperatures(); // request konversi berikutnya
+
     if (t <= -127.0f || t >= 125.0f) {
     } else {
       if (FEAT_FILTER_DS18B20_SOFT && !isnan(heatC)) {
