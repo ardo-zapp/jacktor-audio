@@ -36,6 +36,10 @@ static uint32_t smpsFaultGraceUntilMs = 0;
 static uint32_t spkProtectArmUntilMs = 0;
 static uint32_t smpsValidSince = 0;
 
+// Sleep Timer and OTP States
+static uint32_t sleepTargetEpoch = 0;
+static bool otpLatched = false;
+
 static PowerStateListener powerListener = nullptr;
 
 static void notifyPowerChange(bool prevOn, bool nowOn, PowerChangeReason reason) {
@@ -334,6 +338,30 @@ void powerInit() {
 }
 
 void powerTick(const uint32_t now) {
+  // OTP (Over-Temperature Protection) Check
+  float currentTemp = getHeatsinkC();
+  if (powerIsOn() && !isnan(currentTemp) && currentTemp >= 85.0f && !otpLatched) {
+      otpLatched = true;
+      powerSetMainRelay(false, PowerChangeReason::Command);
+#if LOG_ENABLE
+      LOGF("[OTP] CRITICAL OVER-TEMP! FORCE SHUTDOWN\n");
+#endif
+  }
+
+  // Sleep Timer Check
+  if (sleepTargetEpoch > 0 && powerIsOn()) {
+      uint32_t currentEpoch = 0;
+      if (sensorsGetUnixTime(currentEpoch)) {
+          if (currentEpoch >= sleepTargetEpoch) {
+              sleepTargetEpoch = 0;
+              powerSetMainRelay(false, PowerChangeReason::Command);
+#if LOG_ENABLE
+              LOGF("[SLEEP] Sleep timer reached. Auto power-off.\n");
+#endif
+          }
+      }
+  }
+
   // FAN: Run fanTick() to calculate duty based on mode
   fanTick();
 
@@ -483,6 +511,8 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
     protectFaultLatched = false;
     spkProtectOk = true;
     smpsValidSince = 0;
+    sleepTargetEpoch = 0; // Batalkan sleep timer jika manual mati
+    otpLatched = false;   // Reset proteksi suhu saat mati
   }
 
   applyRelay(on);
@@ -582,4 +612,30 @@ bool powerSmpsIsValid() {
   if (powerSmpsSoftstartActive()) return false;
   if (smpsValidSince == 0) return false;
   return (millis() - smpsValidSince) >= 3000;
+}
+
+bool powerOtpFault() {
+    return otpLatched;
+}
+
+void powerSetSleepTimer(uint32_t minutes) {
+    if (minutes == 0) {
+        sleepTargetEpoch = 0;
+    } else {
+        uint32_t currentEpoch = 0;
+        if (sensorsGetUnixTime(currentEpoch)) {
+            sleepTargetEpoch = currentEpoch + (minutes * 60);
+        }
+    }
+}
+
+uint32_t powerGetSleepRemainingMinutes() {
+    if (sleepTargetEpoch == 0) return 0;
+    uint32_t currentEpoch = 0;
+    if (sensorsGetUnixTime(currentEpoch)) {
+        if (sleepTargetEpoch > currentEpoch) {
+            return (sleepTargetEpoch - currentEpoch) / 60;
+        }
+    }
+    return 0;
 }

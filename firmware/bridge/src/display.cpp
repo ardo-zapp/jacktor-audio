@@ -40,6 +40,8 @@ static lv_obj_t * label_bt;
 static lv_obj_t * btn_prev;
 static lv_obj_t * btn_play;
 static lv_obj_t * btn_next;
+static lv_obj_t * btn_sleep;
+static lv_obj_t * label_sleep;
 
 static lv_obj_t * ta_ssid;
 static lv_obj_t * ta_pass;
@@ -50,6 +52,10 @@ static lv_obj_t * label_ip;
 static bool state_power_on = false;
 static bool state_spk_big = true;
 static bool state_bt_on = true;
+
+// State Sleep Timer UI
+static const uint32_t sleep_cycles[] = {0, 15, 30, 45, 60, 90, 120};
+static uint8_t sleep_idx = 0;
 
 // --- State Backlight & Log Boot ---
 static uint16_t logCursorY = 0;
@@ -138,6 +144,13 @@ static void btn_btctrl_event_cb(lv_event_t * e) {
     else if(btn == btn_play) send_cmd("bt_play", true);
     else if(btn == btn_next) send_cmd("bt_next", true);
   }
+}
+
+static void btn_sleep_event_cb(lv_event_t * e) {
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        sleep_idx = (sleep_idx + 1) % (sizeof(sleep_cycles) / sizeof(sleep_cycles[0]));
+        send_cmd("sleep_timer", sleep_cycles[sleep_idx]);
+    }
 }
 
 static void btn_sync_event_cb(lv_event_t * e) {
@@ -306,8 +319,15 @@ static void build_ui() {
   lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 255);
   lv_chart_set_point_count(chart, 32);
   ser = lv_chart_add_series(chart, lv_color_hex(0x00CFFF), LV_CHART_AXIS_PRIMARY_Y);
-  // Default bar values
-  for(int i=0; i<32; i++) lv_chart_set_next_value(chart, ser, 0);
+
+  // Default bar values using direct array mutation (LVGL 9 compatibility)
+  int32_t * init_y = lv_chart_get_y_array(chart, ser);
+  if (init_y) {
+      for(int i=0; i<32; i++) {
+          init_y[i] = 0;
+      }
+      lv_chart_refresh(chart);
+  }
 
   // === TAB SETTINGS ===
   lv_obj_set_flex_flow(tab_settings, LV_FLEX_FLOW_COLUMN);
@@ -379,6 +399,16 @@ static void build_ui() {
   label_bt = lv_label_create(btn_bt);
   lv_label_set_text(label_bt, LV_SYMBOL_BLUETOOTH " BT:ON");
   lv_obj_center(label_bt);
+
+  // Sleep Timer Button
+  btn_sleep = lv_button_create(tab_home);
+  lv_obj_set_size(btn_sleep, 90, 30);
+  lv_obj_align(btn_sleep, LV_ALIGN_TOP_RIGHT, 0, 5);
+  APPLY_BTN_STYLE(btn_sleep);
+  lv_obj_add_event_cb(btn_sleep, btn_sleep_event_cb, LV_EVENT_ALL, NULL);
+  label_sleep = lv_label_create(btn_sleep);
+  lv_label_set_text(label_sleep, LV_SYMBOL_BELL " SLP:OFF");
+  lv_obj_center(label_sleep);
 
   // Row BT Controls (Prev, Play, Next)
   btn_prev = lv_button_create(tab_home);
@@ -476,12 +506,14 @@ void displayInit() {
   lv_indev_set_read_cb(indev, my_touchpad_read);
 
   // Buat Antarmuka
-  displayBootLog("[ OK ] Generating LVGL Interface...");
+  displayBootLog("[ WAIT ] Generating LVGL Interface...");
   build_ui();
-  displayBootLog("[ OK ] System Ready.");
+}
 
+void displayStartUI() {
+  displayBootLog("[ OK ] System Ready.");
   // Berikan jeda sebentar agar log terakhir terlihat sebelum ditutup UI
-  delay(500);
+  delay(800);
   ui_initialized = true;
 }
 
@@ -518,10 +550,15 @@ void displayUpdateTelemetry(const JsonDocument& doc) {
       JsonArrayConst bands = rt["bands"];
       size_t count = bands.size();
       if (count > 32) count = 32;
-      for (size_t i=0; i<count; i++) {
-        lv_chart_set_value_by_id(chart, ser, i, bands[i]);
+
+      // lv_chart_set_value_by_id dihapus di LVGL 9, cara baru adalah mengakses array-nya langsung
+      int32_t * y_array = lv_chart_get_y_array(chart, ser);
+      if (y_array) {
+          for (size_t i=0; i<count; i++) {
+              y_array[i] = bands[i].as<int32_t>();
+          }
+          lv_chart_refresh(chart);
       }
-      lv_chart_refresh(chart);
     }
   }
 
@@ -559,6 +596,18 @@ void displayUpdateTelemetry(const JsonDocument& doc) {
 
         state_bt_on = inputs["bt"] | false;
         lv_label_set_text(label_bt, state_bt_on ? "BT: ON" : "BT: OFF");
+    }
+
+    // Update Sleep Timer Tracker
+    uint32_t sleep_remaining = hz1["sleep_timer"] | 0;
+    if (sleep_remaining == 0) {
+        lv_label_set_text(label_sleep, LV_SYMBOL_BELL " SLP:OFF");
+        lv_obj_set_style_text_color(label_sleep, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+    } else {
+        char slpBuf[32];
+        snprintf(slpBuf, sizeof(slpBuf), LV_SYMBOL_BELL " %dm", sleep_remaining);
+        lv_label_set_text(label_sleep, slpBuf);
+        lv_obj_set_style_text_color(label_sleep, lv_color_hex(0xFF8800), LV_PART_MAIN); // Orange jika aktif
     }
   }
 }

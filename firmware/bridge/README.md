@@ -1,29 +1,40 @@
-# Jacktor Audio Panel Bridge (ESP32-S3)
+# Panel Bridge (ESP32-S3) - LVGL 9.x
 
-Firmware ini berjalan di atas ESP32-S3 yang didedikasikan sebagai panel kendali utama. Memiliki layar sentuh TFT ILI9341 3.2" dan antarmuka modern menggunakan LVGL 9.x.
+Firmware ini bertugas sebagai UI (User Interface) utama ekosistem Jacktor Audio. Ia menggunakan ESP32-S3 dengan PSRAM 8MB dan Flash 16MB untuk menyokong mesin grafis tingkat lanjut.
 
-## Pin Mapping ESP32-S3
+## Arsitektur Tampilan
+Menggunakan teknik **Full-Screen Double Buffering** di memori PSRAM (`MALLOC_CAP_SPIRAM`). Teknik ini menghilangkan gejala *tearing* dan membuat animasi UI berjalan sangat mulus (60 FPS) berkat transfer DMA latar belakang.
 
-*Bridge ini tidak lagi menggunakan modul USB OTG Android.* Native USB D+/D- dari ESP32-S3 (GPIO 19 dan 20) dihubungkan langsung ke PC untuk USB Serial (CDC) dan mendeteksi PC Sleep (USB Suspend).
+- **Tab Home**: Menampilkan status tegangan, VU Meter, kontrol daya, speaker, serta tombol Sleep Timer (15-120 menit).
+- **Tab Analyzer**: Memanfaatkan `lv_chart` untuk menggambarkan grafis respons frekuensi 32-band yang tersinkronisasi dari Amplifier via UART.
+- **Tab Settings**: Konektivitas Wi-Fi terintegrasi dengan layar sentuh (Virtual Keyboard). Jam dari server NTP Asia/Jakarta diteruskan ke unit Amplifier agar hardware RTC (DS3231) selalu akurat.
 
-### SPI 2 (FSPI) - TFT LCD ILI9341
-- `MOSI` : GPIO 11
-- `MISO` : GPIO 13
-- `SCK`  : GPIO 12
-- `CS`   : GPIO 10
-- `DC`   : GPIO 9
-- `RST`  : GPIO 14
-- `LED/BL`: GPIO 21
+## Pemetaan Pin / Wiring (ESP32-S3)
 
-### SPI 3 (VSPI) - Touchscreen XPT2046 & SD Card
-(Terpisah dari LCD untuk menghindari lag pada DMA LVGL)
-- `MOSI` : GPIO 35
-- `MISO` : GPIO 37
-- `SCK`  : GPIO 36
-- `CS`   : GPIO 38
-- `IRQ`  : GPIO 39
-- `SD_CS`: GPIO 40
+*Catatan: Semua SPI bus dipisah untuk mencegah *bottleneck* performa dari DMA layar dengan Polling sentuhan.*
 
-### UART - Komunikasi dengan Amplifier
-- `TX`   : GPIO 17
-- `RX`   : GPIO 18 (Cross ke RX/TX Amplifier)
+| Komponen | Pin (ESP32-S3) | Fungsi & Keterangan |
+| :--- | :--- | :--- |
+| **LCD ILI9341 (FSPI)** | | Resolusi Layar: 320x240 |
+| MOSI | 11 | Jalur data utama untuk render gambar. |
+| MISO | 13 | (Sering tidak dipakai oleh LCD, diabaikan) |
+| SCK | 12 | SPI Clock |
+| CS | 10 | Chip Select LCD |
+| DC | 9 | Data/Command pin |
+| RST | 14 | Hardware Reset |
+| BL | 21 | Backlight (Dikonfigurasi PWM untuk animasi fade-out) |
+| **Touch XPT2046 (HSPI)**| | SPI terpisah (VSPI) agar DMA tidak tersendat. |
+| MOSI | 35 | Jalur data input |
+| MISO | 37 | Jalur data output (koordinat) |
+| SCK | 36 | Touch SPI Clock |
+| CS | 38 | Chip Select Touchscreen |
+| IRQ | 39 | Interrupt deteksi sentuhan (*wake from sleep*) |
+| **Lainnya** | | |
+| UART TX (Ke Amp) | 17 | Kirim perintah JSON (Baud 921,600) |
+| UART RX (Dari Amp) | 18 | Terima telemetri JSON (Baud 921,600) |
+| Native USB D+ | 20 | USB CDC & Deteksi status Sleep (PC) |
+| Native USB D- | 19 | USB CDC |
+| SD_CS | 40 | (Akan digunakan pada update ke depan) |
+
+## Wi-Fi OTA
+Panel ini menyalakan *Web Server Asynchronous* di port 80 setelah terhubung ke internet. Anda bisa melakukan flash file `.bin` langsung melalui rute `/update`.

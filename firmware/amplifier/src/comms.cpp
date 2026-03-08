@@ -151,6 +151,7 @@ static void writeErrors(JsonArray arr) {
   }
   if (isnan(getHeatsinkC())) arr.add("SENSOR_FAIL");
   if (powerSpkProtectFault()) arr.add("SPEAKER_PROTECT_FAIL");
+  if (powerOtpFault()) arr.add("OVER_TEMP_FAULT");
 }
 
 static void writeAnalyzer(JsonObject data) {
@@ -273,6 +274,8 @@ static void sendSlowTelemetry(uint32_t now) {
   smps["v"] = getVoltageInstant();
   smps["stage"] = powerSmpsTripLatched() ? "trip" : (powerIsOn() ? "armed" : "standby");
   smps["cutoff"] = stateSmpsCutoffV();
+
+  data["sleep_timer"] = powerGetSleepRemainingMinutes();
   smps["recover"] = stateSmpsRecoveryV();
 
   data["v12"] = getVoltage12V();
@@ -479,30 +482,9 @@ static void handleRtcSync(uint32_t targetEpoch) {
   }
 
   int32_t offset = (int32_t)((int64_t)targetEpoch - (int64_t)currentEpoch);
-  int32_t absOffset = offset >= 0 ? offset : -offset;
-  if (!FEAT_RTC_SYNC_POLICY) {
-    if (!sensorsSetUnixTime(targetEpoch)) {
-      sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
-      return;
-    }
-    stateSetLastRtcSync(targetEpoch);
-    sendLogInfoOffset(offset);
-    forceTel = true;
-    return;
-  }
-  if (absOffset <= RTC_SYNC_MIN_OFFS_SEC) {
-    sendLogWarnReason("rtc_sync_skipped", "offset_small");
-    return;
-  }
 
-  const uint32_t minInterval = (uint32_t)RTC_SYNC_MIN_INTERVAL_H * 3600UL;
-  uint32_t last = stateLastRtcSync();
-  uint32_t ref = (targetEpoch > currentEpoch) ? targetEpoch : currentEpoch;
-  if (last != 0 && (ref - last) < minInterval) {
-    sendLogWarnReason("rtc_sync_skipped", "ratelimited");
-    return;
-  }
-
+  // BYPASS: Karena Panel Bridge baru sekarang memakai NTP Wi-Fi (Sangat akurat),
+  // kita abaikan semua policy lama (rate limit) agar jam di amp selalu terupdate secara paksa.
   if (!sensorsSetUnixTime(targetEpoch)) {
     sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
     return;
@@ -514,26 +496,19 @@ static void handleRtcSync(uint32_t targetEpoch) {
 }
 
 // Force sync RTC (bypass rate limit)
-static void handleRtcSyncForce(uint32_t targetEpoch) {
-  uint32_t currentEpoch = 0;
-  sensorsGetUnixTime(currentEpoch);
-  
-  if (!sensorsSetUnixTime(targetEpoch)) {
-    sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
-    return;
-  }
-  
-  int32_t offset = (int32_t)((int64_t)targetEpoch - (int64_t)currentEpoch);
-  stateSetLastRtcSync(targetEpoch);
-  sendLogInfoOffset(offset);
-  forceTel = true;
-}
-
 static void handleCmdPower(JsonVariant v) {
   if (!v.is<bool>()) { sendAckErr("power", "invalid"); return; }
   bool on = v.as<bool>();
   powerSetMainRelay(on, PowerChangeReason::Command);
   sendAckOk("power", on);
+  forceTel = true;
+}
+
+static void handleCmdSleepTimer(JsonVariant v) {
+  if (!v.is<uint32_t>()) { sendAckErr("sleep_timer", "invalid"); return; }
+  uint32_t minutes = v.as<uint32_t>();
+  powerSetSleepTimer(minutes);
+  sendAckOk("sleep_timer", minutes);
   forceTel = true;
 }
 
@@ -637,7 +612,7 @@ static void handleCmdRtcSet(JsonVariant v) {
 static void handleCmdRtcSetEpoch(JsonVariant v) {
   if (!variantIsNumber(v)) { sendAckErr("rtc_set_epoch", "invalid"); return; }
   uint32_t epoch = v.as<uint32_t>();
-  handleRtcSyncForce(epoch);
+  handleRtcSync(epoch);
 }
 
 static void handleCmdBuzz(JsonVariant v) {
@@ -796,7 +771,11 @@ static void handleJsonLine(const String &line) {
   JsonObject cmd = root["cmd"];
   if (cmd.isNull()) return;
 
+  // Bunyikan buzzer setiap kali ada perintah tervalidasi dari panel
+  buzzerClick();
+
   HANDLE_IF_PRESENT("power", handleCmdPower);
+  HANDLE_IF_PRESENT("sleep_timer", handleCmdSleepTimer);
   HANDLE_IF_PRESENT("bt", handleCmdBt);
   HANDLE_IF_PRESENT("spk_sel", handleCmdSpkSel);
   HANDLE_IF_PRESENT("spk_pwr", handleCmdSpkPwr);

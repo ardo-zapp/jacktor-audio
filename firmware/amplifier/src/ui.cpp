@@ -7,6 +7,9 @@
 #include <U8g2lib.h>
 #include <cstring>
 
+// OLED Screen Saver state
+static uint32_t last_ui_interaction_ms = 0;
+
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0);
 
 enum class UiScene : uint8_t {
@@ -155,6 +158,19 @@ void uiTick(uint32_t now) {
   if (now - lastDrawMs < 33) return;
   lastDrawMs = now;
 
+  // OLED Screen Saver Logic (Standby mode only)
+  // Redupkan layar (setContrast) jika tidak ada interaksi selama 30 detik untuk mencegah burn-in
+  if (scene == UiScene::STANDBY) {
+      if (now - last_ui_interaction_ms > 30000) {
+          u8g2.setContrast(0); // Sangat redup
+      } else {
+          u8g2.setContrast(255); // Terang
+      }
+  } else {
+      u8g2.setContrast(255);
+      last_ui_interaction_ms = now; // Selalu reset timer di mode RUN/ERROR
+  }
+
   switch (scene) {
     case UiScene::SPLASH: break;
     case UiScene::BOOTLOG: u8g2.sendBuffer(); break;
@@ -231,6 +247,9 @@ void uiSetDate(const char* yyyymmdd) {
 }
 
 void uiSetInputStatus(bool bt, bool speakerBig) {
+  if (btMode != bt || spkBig != speakerBig) {
+      last_ui_interaction_ms = millis(); // Wake up screensaver on state change
+  }
   btMode = bt;
   spkBig = speakerBig;
 }

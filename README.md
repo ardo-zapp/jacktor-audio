@@ -1,34 +1,29 @@
-# Jacktor Audio - Amplifier 
+# Jacktor Audio - Smart Amplifier Ecosystem
 
-Jacktor Audio adalah ekosistem amplifier pintar lengkap dengan panel bridge, aplikasi desktop (Electron), serta aplikasi Android (Compose) untuk kontrol dan telemetri. Repositori ini menampung seluruh komponen tersebut dalam satu monorepo.
+Jacktor Audio adalah ekosistem amplifier pintar dua-tingkat (Dual-Node) yang memisahkan kendali visual dari mesin pengolah audio menggunakan konektivitas JSON Serial. Repositori ini menampung seluruh komponen firmware (ESP32 & ESP32-S3), serta aplikasi pendukung (Desktop & Android).
 
-## Struktur Repository
+## Arsitektur Sistem
 
-```
-firmware/
-  amplifier/    # Firmware ESP32 (biasa) untuk unit amplifier utama
-  bridge/       # Firmware ESP32-S3 panel bridge (LCD ILI9341 + Touch + Native USB)
-  partitions/   # Tabel partisi OTA bersama (jacktor_audio_ota.csv)
-panel/
-  desktop/      # Aplikasi desktop Electron + React
-  android/      # Aplikasi Android (Compose, target Android 16)
-  docs/
-```
+- **Amplifier Unit (ESP32)**: Node bawah yang mengendalikan hardware *low-level* secara presisi. Menangani ADC I2S (untuk FFT Analyzer), kontrol PWM kipas, perlindungan suhu (OTP 85°C), relay daya, dan sinkronisasi RTC I2C. Komunikasi dilakukan melalui UART (Baud: 921600).
+- **Panel Bridge (ESP32-S3)**: Node atas untuk antar-muka pengguna. Dilengkapi dengan PSRAM 8MB untuk mengoperasikan antarmuka grafis *LVGL 9.x* dengan layar sentuh *ILI9341* (resolusi 320x240, *Double-Buffered*). Melayani Web Server OTA, koneksi Wi-Fi, dan sinkronisasi waktu internet (NTP).
 
-## Arsitektur Terbaru
+## Sorotan Fitur
 
-- **Amplifier (ESP32)**: Menangani I2S, FFT Analyzer, Kontrol PWM Kipas, dan deteksi sensor Dallas (Non-blocking).
-- **Panel Bridge (ESP32-S3)**: Menangani UI modern dengan LVGL 9.x pada layar 3.2" ILI9341 SPI Touchscreen. Memakai `Native USB CDC` untuk koneksi PC sekaligus pendeteksi `USB Suspend` saat PC Sleep untuk mengendalikan auto off Amplifier.
-- *Fitur OTG Android telah dihapuskan dari Bridge.* Koneksi kini sepenuhnya mengandalkan Bluetooth atau komunikasi serial native USB.
+1. **Dynamic Fan Control & Protection**: Sensor DS18B20 diakses secara non-blocking dengan filter *Low-Pass* untuk mendeteksi suhu *heatsink*. Menampilkan 3-point Fan Curve dengan anti-stall minimum duty.
+2. **Audio Analyzer (FFT)**: Amplifier menghitung 32-band FFT dari input audio dan mentransmisikannya setiap ~30ms (`rt` frame) ke panel, dimana LVGL me-rendernya menggunakan Chart grafik bar.
+3. **Smart Power Management**:
+   - **PC Detect**: Membaca sinyal VBUS/Suspend lewat Native USB Panel.
+   - **Sleep Timer**: Pengguna bisa menyetel Auto-Off dari Panel (15m, 30m, 45m ... 120m).
+   - **OLED Screen Saver**: OLED amplifier otomatis meredup saat tidak aktif, meminimalisir *burn-in*.
+4. **Wireless OTA**: Mengunggah firmware `.bin` dengan mudah menggunakan Web Browser (`http://[ip]/update`).
 
-## Dokumentasi Spesifik
+## Struktur Folder & Dokumentasi
+- [`firmware/amplifier/README.md`](firmware/amplifier/README.md) — Penjelasan detail GPIO, protokol UART JSON, dan proteksi dari unit Amplifier.
+- [`firmware/bridge/README.md`](firmware/bridge/README.md) — Detail lengkap sistem UI LVGL, pemetaan SPI LCD & Touch, serta setup Wi-Fi.
 
-- `firmware/amplifier/README.md` — Detail fungsi dan telemetri ESP32 Amplifier.
-- `firmware/bridge/README.md` — Mapping PIN ESP32-S3 SPI, Touchscreen XPT2046, dan instruksi UI LVGL 9.x.
-
-## PlatformIO + CLion Quick Setup (AUTO)
-
-Jalankan dari root repo:
+## Pengembangan & Kompilasi
+PlatformIO telah disetup dengan *compiler flag* modern. Cukup jalankan:
 ```bash
 python3 tools/setup_pio_clion.py
 ```
+Atau jalankan manual melalui ekstensi VS Code.
