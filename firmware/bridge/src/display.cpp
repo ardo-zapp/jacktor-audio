@@ -1,6 +1,7 @@
 #include "display.h"
 #include "config.h"
 #include "comms.h"
+#include "net.h"
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include <XPT2046_Touchscreen.h>
@@ -24,6 +25,8 @@ static lv_obj_t * label_temp;
 static lv_obj_t * label_volt;
 static lv_obj_t * label_mode;
 static lv_obj_t * bar_vu;
+static lv_obj_t * chart;
+static lv_chart_series_t * ser;
 
 static lv_obj_t * btn_power;
 static lv_obj_t * label_power;
@@ -35,10 +38,26 @@ static lv_obj_t * btn_prev;
 static lv_obj_t * btn_play;
 static lv_obj_t * btn_next;
 
+static lv_obj_t * ta_ssid;
+static lv_obj_t * ta_pass;
+static lv_obj_t * kb;
+static lv_obj_t * label_ip;
+
 // State Tracking for toggles
 static bool state_power_on = false;
 static bool state_spk_big = true;
 static bool state_bt_on = true;
+
+// --- State Backlight & Log Boot ---
+static uint16_t logCursorY = 0;
+static bool ui_initialized = false;
+static bool backlight_state = true;
+static int current_pwm = 255;
+static int target_pwm = 255;
+static uint32_t last_fade_ms = 0;
+
+// Forward declaration untuk touch
+static void send_cmd(const char* key, bool val);
 
 static void my_disp_flush(lv_display_t * disp, const lv_area_t * area, uint8_t * px_map) {
   uint32_t w = lv_area_get_width(area);
@@ -54,6 +73,13 @@ static void my_disp_flush(lv_display_t * disp, const lv_area_t * area, uint8_t *
 
 static void my_touchpad_read(lv_indev_t * indev, lv_indev_data_t * data) {
   if (ts.tirqTouched() && ts.touched()) {
+    // Wake up dari standby bila layar ditekan
+    if (!backlight_state) {
+        displaySetBacklight(true);
+        // Kirim command nyalakan power amp
+        send_cmd("power", true);
+    }
+
     TS_Point p = ts.getPoint();
 
     // Kalibrasi touchscreen (tergantung layar, ini nilai kasar default ILI9341+XPT2046)
@@ -111,6 +137,96 @@ static void btn_btctrl_event_cb(lv_event_t * e) {
   }
 }
 
+static void btn_sync_event_cb(lv_event_t * e) {
+  if(lv_event_get_code(e) == LV_EVENT_CLICKED) {
+    netSyncRTC();
+  }
+}
+
+static void dd_fan_event_cb(lv_event_t * e) {
+  if(lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+    lv_obj_t * dd = (lv_obj_t *)lv_event_get_target(e);
+    char buf[32];
+    lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
+    String mode(buf);
+    mode.toLowerCase();
+    send_cmd_str("fan_mode", mode.c_str());
+  }
+}
+
+static void dd_smps_event_cb(lv_event_t * e) {
+  if(lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+    lv_obj_t * dd = (lv_obj_t *)lv_event_get_target(e);
+    uint16_t sel = lv_dropdown_get_selected(dd);
+    send_cmd("smps_bypass", sel == 1);
+  }
+}
+
+static void ta_event_cb(lv_event_t * e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t * ta = (lv_obj_t *)lv_event_get_target(e);
+    if(code == LV_EVENT_FOCUSED) {
+        lv_keyboard_set_textarea(kb, ta);
+        lv_obj_remove_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(code == LV_EVENT_DEFOCUSED) {
+        lv_keyboard_set_textarea(kb, NULL);
+        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(code == LV_EVENT_READY) { // Enter dipencet di keyboard
+        const char * ssid = lv_textarea_get_text(ta_ssid);
+        const char * pass = lv_textarea_get_text(ta_pass);
+        if(strlen(ssid) > 0) {
+            netConnectToWifi(String(ssid), String(pass));
+        }
+        lv_keyboard_set_textarea(kb, NULL);
+        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_state(ta, LV_STATE_FOCUSED);
+    }
+}
+
+void displayBootLog(const char* msg) {
+  if (ui_initialized) return; // jangan log jika UI sudah berjalan
+
+  if (logCursorY == 0) {
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_GREEN, TFT_BLACK);
+    tft.setTextSize(1); // Standard font size
+  }
+
+  tft.setCursor(0, logCursorY);
+  tft.print(msg);
+  tft.println();
+
+  logCursorY += 10;
+
+  // Jika log melebihi layar, reset & scroll manual (simple)
+  if (logCursorY >= TFT_WIDTH - 20) { // Layar adalah landscape (320px tinggi aktual log = lebar portrait 240 karena diputar)
+    logCursorY = 0;
+    tft.fillScreen(TFT_BLACK);
+  }
+}
+
+void displaySetBacklight(bool on) {
+  if (backlight_state != on) {
+    backlight_state = on;
+    target_pwm = on ? 255 : 0;
+  }
+}
+
+static void handle_backlight_fade() {
+  if (current_pwm != target_pwm) {
+    uint32_t now = millis();
+    if (now - last_fade_ms > 2) { // 2ms per step
+      if (current_pwm < target_pwm) current_pwm++;
+      else current_pwm--;
+
+      ledcWrite(0, current_pwm);
+      last_fade_ms = now;
+    }
+  }
+}
+
 static void build_ui() {
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x080B0E), LV_PART_MAIN);
 
@@ -130,62 +246,129 @@ static void build_ui() {
   lv_obj_set_style_text_color(label_mode, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
   lv_obj_align(label_mode, LV_ALIGN_TOP_RIGHT, -5, 5);
 
-  // Bar VU
-  bar_vu = lv_bar_create(lv_screen_active());
-  lv_obj_set_size(bar_vu, 300, 15);
-  lv_obj_align(bar_vu, LV_ALIGN_TOP_MID, 0, 50);
+  // Tabview Header (Bottom or Top) di LVGL 9
+  lv_obj_t * tabview = lv_tabview_create(lv_screen_active());
+  lv_tabview_set_tab_bar_position(tabview, LV_DIR_BOTTOM);
+
+  lv_obj_t * tab_bar = lv_tabview_get_tab_bar(tabview);
+  lv_obj_set_height(tab_bar, 40);
+
+  lv_obj_t * tab_home = lv_tabview_add_tab(tabview, LV_SYMBOL_HOME " Home");
+  lv_obj_t * tab_analyzer = lv_tabview_add_tab(tabview, LV_SYMBOL_AUDIO " Analyzer");
+  lv_obj_t * tab_settings = lv_tabview_add_tab(tabview, LV_SYMBOL_SETTINGS " Settings");
+
+  // === TAB ANALYZER ===
+  chart = lv_chart_create(tab_analyzer);
+  lv_obj_set_size(chart, 300, 140);
+  lv_obj_center(chart);
+  lv_chart_set_type(chart, LV_CHART_TYPE_BAR);
+  lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 255);
+  lv_chart_set_point_count(chart, 32);
+  ser = lv_chart_add_series(chart, lv_color_hex(0x00CFFF), LV_CHART_AXIS_PRIMARY_Y);
+  // Default bar values
+  for(int i=0; i<32; i++) lv_chart_set_next_value(chart, ser, 0);
+
+  // === TAB SETTINGS ===
+  lv_obj_set_flex_flow(tab_settings, LV_FLEX_FLOW_COLUMN);
+
+  label_ip = lv_label_create(tab_settings);
+  lv_label_set_text(label_ip, "IP: Disconnected");
+
+  lv_obj_t * row_btn = lv_obj_create(tab_settings);
+  lv_obj_set_size(row_btn, LV_PCT(100), LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(row_btn, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_all(row_btn, 0, 0);
+  lv_obj_set_style_border_width(row_btn, 0, 0);
+  lv_obj_set_style_bg_opa(row_btn, 0, 0);
+
+  lv_obj_t * btn_sync = lv_button_create(row_btn);
+  lv_obj_add_event_cb(btn_sync, btn_sync_event_cb, LV_EVENT_ALL, NULL);
+  lv_obj_t * lbl_sync = lv_label_create(btn_sync);
+  lv_label_set_text(lbl_sync, LV_SYMBOL_REFRESH " Sync NTP");
+
+  // Dropdown Fan
+  lv_obj_t * dd_fan = lv_dropdown_create(row_btn);
+  lv_dropdown_set_options(dd_fan, "Auto\nCustom\nFailsafe");
+  lv_obj_add_event_cb(dd_fan, dd_fan_event_cb, LV_EVENT_ALL, NULL);
+
+  // Dropdown SMPS
+  lv_obj_t * dd_smps = lv_dropdown_create(row_btn);
+  lv_dropdown_set_options(dd_smps, "SMPS ON\nBypass");
+  lv_obj_add_event_cb(dd_smps, dd_smps_event_cb, LV_EVENT_ALL, NULL);
+
+  // WiFi Inputs
+  ta_ssid = lv_textarea_create(tab_settings);
+  lv_textarea_set_one_line(ta_ssid, true);
+  lv_textarea_set_placeholder_text(ta_ssid, "SSID");
+  lv_obj_set_width(ta_ssid, LV_PCT(100));
+  lv_obj_add_event_cb(ta_ssid, ta_event_cb, LV_EVENT_ALL, NULL);
+
+  ta_pass = lv_textarea_create(tab_settings);
+  lv_textarea_set_one_line(ta_pass, true);
+  lv_textarea_set_password_mode(ta_pass, true);
+  lv_textarea_set_placeholder_text(ta_pass, "Password");
+  lv_obj_set_width(ta_pass, LV_PCT(100));
+  lv_obj_add_event_cb(ta_pass, ta_event_cb, LV_EVENT_ALL, NULL);
+
+  // Keyboard (Hidden by default, attaches to active text area)
+  kb = lv_keyboard_create(lv_screen_active());
+  lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+
+  // === TAB HOME ===
+  bar_vu = lv_bar_create(tab_home);
+  lv_obj_set_size(bar_vu, 280, 15);
+  lv_obj_align(bar_vu, LV_ALIGN_TOP_MID, 0, 30);
   lv_bar_set_range(bar_vu, 0, 255);
   lv_bar_set_value(bar_vu, 0, LV_ANIM_OFF);
 
-  // Row Kontrol Atas (Speaker & BT Toggle)
-  btn_spk = lv_button_create(lv_screen_active());
-  lv_obj_set_size(btn_spk, 120, 40);
-  lv_obj_align(btn_spk, LV_ALIGN_CENTER, -70, -10);
+  btn_spk = lv_button_create(tab_home);
+  lv_obj_set_size(btn_spk, 110, 40);
+  lv_obj_align(btn_spk, LV_ALIGN_CENTER, -60, -10);
   lv_obj_add_event_cb(btn_spk, btn_spk_event_cb, LV_EVENT_ALL, NULL);
   label_spk = lv_label_create(btn_spk);
-  lv_label_set_text(label_spk, "SPK: BIG");
+  lv_label_set_text(label_spk, LV_SYMBOL_VOLUME_MID " SPK:BIG");
   lv_obj_center(label_spk);
 
-  btn_bt = lv_button_create(lv_screen_active());
-  lv_obj_set_size(btn_bt, 120, 40);
-  lv_obj_align(btn_bt, LV_ALIGN_CENTER, 70, -10);
+  btn_bt = lv_button_create(tab_home);
+  lv_obj_set_size(btn_bt, 110, 40);
+  lv_obj_align(btn_bt, LV_ALIGN_CENTER, 60, -10);
   lv_obj_add_event_cb(btn_bt, btn_bt_event_cb, LV_EVENT_ALL, NULL);
   label_bt = lv_label_create(btn_bt);
-  lv_label_set_text(label_bt, "BT: ON");
+  lv_label_set_text(label_bt, LV_SYMBOL_BLUETOOTH " BT:ON");
   lv_obj_center(label_bt);
 
   // Row BT Controls (Prev, Play, Next)
-  btn_prev = lv_button_create(lv_screen_active());
+  btn_prev = lv_button_create(tab_home);
   lv_obj_set_size(btn_prev, 60, 40);
   lv_obj_align(btn_prev, LV_ALIGN_CENTER, -80, 40);
   lv_obj_add_event_cb(btn_prev, btn_btctrl_event_cb, LV_EVENT_ALL, NULL);
   lv_obj_t * lbl = lv_label_create(btn_prev);
-  lv_label_set_text(lbl, "<<");
+  lv_label_set_text(lbl, LV_SYMBOL_PREV);
   lv_obj_center(lbl);
 
-  btn_play = lv_button_create(lv_screen_active());
+  btn_play = lv_button_create(tab_home);
   lv_obj_set_size(btn_play, 80, 40);
   lv_obj_align(btn_play, LV_ALIGN_CENTER, 0, 40);
   lv_obj_add_event_cb(btn_play, btn_btctrl_event_cb, LV_EVENT_ALL, NULL);
   lbl = lv_label_create(btn_play);
-  lv_label_set_text(lbl, "PLAY");
+  lv_label_set_text(lbl, LV_SYMBOL_PLAY);
   lv_obj_center(lbl);
 
-  btn_next = lv_button_create(lv_screen_active());
+  btn_next = lv_button_create(tab_home);
   lv_obj_set_size(btn_next, 60, 40);
   lv_obj_align(btn_next, LV_ALIGN_CENTER, 80, 40);
   lv_obj_add_event_cb(btn_next, btn_btctrl_event_cb, LV_EVENT_ALL, NULL);
   lbl = lv_label_create(btn_next);
-  lv_label_set_text(lbl, ">>");
+  lv_label_set_text(lbl, LV_SYMBOL_NEXT);
   lv_obj_center(lbl);
 
-  // Tombol Power Utama (Bawah)
-  btn_power = lv_button_create(lv_screen_active());
-  lv_obj_set_size(btn_power, 300, 45);
+  // Tombol Power Utama (Bawah Tab Home)
+  btn_power = lv_button_create(tab_home);
+  lv_obj_set_size(btn_power, 280, 40);
   lv_obj_align(btn_power, LV_ALIGN_BOTTOM_MID, 0, -5);
   lv_obj_add_event_cb(btn_power, btn_power_event_cb, LV_EVENT_ALL, NULL);
   label_power = lv_label_create(btn_power);
-  lv_label_set_text(label_power, "POWER");
+  lv_label_set_text(label_power, LV_SYMBOL_POWER " POWER");
   lv_obj_center(label_power);
 }
 
@@ -195,9 +378,16 @@ void displayInit() {
   tft.setRotation(1); // Landscape
   tft.fillScreen(TFT_BLACK);
 
-  // Nyalakan Backlight (PWM / HIGH)
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
+  // Nyalakan Backlight menggunakan LEDC PWM agar bisa animasi meredup (fade out)
+  ledcSetup(0, 5000, 8); // Channel 0, 5KHz, 8-bit res (0-255)
+  ledcAttachPin(TFT_BL, 0);
+  ledcWrite(0, 255); // Full brightness awal
+  current_pwm = target_pwm = 255;
+  backlight_state = true;
+  ui_initialized = false;
+
+  displayBootLog("Starting Jacktor OS (ESP32-S3)...");
+  displayBootLog("[ OK ] Display & PWM Initialized.");
 
   // Inisiasi Touch SPI bus
   touchSPI.begin(PIN_TOUCH_SCK, PIN_TOUCH_MISO, PIN_TOUCH_MOSI, PIN_TOUCH_CS);
@@ -218,11 +408,30 @@ void displayInit() {
   lv_indev_set_read_cb(indev, my_touchpad_read);
 
   // Buat Antarmuka
+  displayBootLog("[ OK ] Generating LVGL Interface...");
   build_ui();
+  displayBootLog("[ OK ] System Ready.");
+
+  // Berikan jeda sebentar agar log terakhir terlihat sebelum ditutup UI
+  delay(500);
+  ui_initialized = true;
 }
 
 void displayTick(uint32_t now) {
-  lv_timer_handler(); // memproses animasi dan UI event LVGL
+  if (ui_initialized) {
+    lv_timer_handler(); // Selalu jalankan agar indev (touch) tetap bisa pooling polling walau layar mati
+
+    // Update UI Dinamis
+    if (backlight_state) {
+      static uint32_t last_ip_update = 0;
+      if (now - last_ip_update > 1000) {
+        String ip = netGetIP();
+        lv_label_set_text_fmt(label_ip, "IP: %s", ip.c_str());
+        last_ip_update = now;
+      }
+    }
+  }
+  handle_backlight_fade();
 }
 
 void displayUpdateTelemetry(const JsonDocument& doc) {
@@ -232,9 +441,20 @@ void displayUpdateTelemetry(const JsonDocument& doc) {
     lv_bar_set_value(bar_vu, vu, LV_ANIM_OFF); // Realtime ~30Hz, matikan animasi bawaan LVGL agar responsif
 
     const char * mode = rt["input"] | "aux";
-    String mStr = String("Mode: ") + mode;
+    String mStr = String(mode);
     mStr.toUpperCase();
     lv_label_set_text(label_mode, mStr.c_str());
+
+    // Update 32 Band Analyzer
+    if (rt["bands"].is<JsonArray>()) {
+      JsonArrayConst bands = rt["bands"];
+      size_t count = bands.size();
+      if (count > 32) count = 32;
+      for (size_t i=0; i<count; i++) {
+        lv_chart_set_value_by_id(chart, ser, i, bands[i]);
+      }
+      lv_chart_refresh(chart);
+    }
   }
 
   if (doc["hz1"].is<JsonObject>()) {

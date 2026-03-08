@@ -76,9 +76,9 @@ void commsTick(uint32_t now) {
     lastPcActiveMs = now;
     if (pcAsleep) {
       pcAsleep = false;
-      // Beritahu amplifier bahwa PC sudah ON via power wake (opsional),
-      // tetapi amplifier Jacktor punya PC Detect opto di HW nya sendiri.
-      // Kita asumsikan deteksi ini sinkron juga dari bridge.
+      // PC Bangun, hidupkan layar panel
+      displaySetBacklight(true);
+
       JsonDocument doc;
       JsonObject root = doc.to<JsonObject>();
       root["type"] = "cmd";
@@ -89,6 +89,9 @@ void commsTick(uint32_t now) {
     // Jika tidak ada koneksi CDC terhubung selama timeout, anggap Sleep/Mati
     if (!pcAsleep && (now - lastPcActiveMs >= PC_SLEEP_TIMEOUT_MS)) {
       pcAsleep = true;
+      // PC Sleep, redupkan layar panel untuk hemat daya (Standby UI)
+      displaySetBacklight(false);
+
       // Kirim auto-off command ke Amp
       JsonDocument doc;
       JsonObject root = doc.to<JsonObject>();
