@@ -2,17 +2,22 @@
 #include "config.h"
 #include "comms.h"
 #include "display.h"
+#include "net.h"
 
 void setup() {
+  displayInit(); // Tampilkan boot log pertama
   commsInit();
-  displayInit();
-  // Karena OTG dihapus, dan Native USB diinisialisasi secara background
-  // pada framework Arduino (build_flags ARDUINO_USB_CDC_ON_BOOT=1),
-  // setup langsung selesai.
+  displayBootLog("[ OK ] Comms (UART & USB CDC) Initialized");
+
+  netInit(); // Inisiasi Wi-Fi & Web OTA server
+
+  displayBootLog("[ WAIT ] Negotiating Amplifier Link...");
+  delay(1000); // Simulasi tunggu sebentar
 }
 
 void loop() {
   uint32_t now = millis();
   commsTick(now);
+  netTick(now);
   displayTick(now);
 }
