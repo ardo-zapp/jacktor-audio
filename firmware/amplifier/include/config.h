@@ -212,7 +212,7 @@
 #define FAN_PWM_RES_BITS         10     // Duty 0..1023
 
 // Boot test kipas (opsional)
-#define FAN_BOOT_TEST_MS         3000
+#define FAN_BOOT_TEST_MS         5000
 #define FAN_BOOT_TEST_DUTY       1023    // 0..1023
 
 // Mode default & custom duty
@@ -225,9 +225,9 @@
 #define FAN_AUTO_T1_C            40.0f
 #define FAN_AUTO_T2_C            60.0f
 #define FAN_AUTO_T3_C            80.0f
-#define FAN_AUTO_MIN             250
-#define FAN_AUTO_D1              400
-#define FAN_AUTO_D2              650
+#define FAN_AUTO_MIN             450
+#define FAN_AUTO_D1              550
+#define FAN_AUTO_D2              750
 #define FAN_AUTO_D3              1023
 
 // Duty fallback bila FAILSAFE
