@@ -307,6 +307,9 @@ void powerInit() {
     ledc_channel_config(&fanChCfg);
 
     if (FEAT_FAN_BOOT_TEST) {
+      // Tunggu sesaat agar konfigurasi PWM (LEDC) stabil sebelum set duty cycle
+      // supaya "kickstart" kipas bertenaga penuh.
+      delay(10);
       LOGF("[FAN] Boot test: duty=%d for %dms\n", FAN_BOOT_TEST_DUTY, FAN_BOOT_TEST_MS);
       fanWriteDuty(FAN_BOOT_TEST_DUTY);
       delay(FAN_BOOT_TEST_MS);
