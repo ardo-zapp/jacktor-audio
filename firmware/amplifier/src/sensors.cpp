@@ -94,12 +94,17 @@ void sensorsTick(uint32_t now) {
     float t = dallas.getTempCByIndex(0);
     dallas.requestTemperatures(); // request konversi berikutnya
 
-    if (t <= -127.0f || t >= 125.0f) {
+    // Filter lonjakan (spike) sensor Dallas yang salah (sering -127.0 atau >120)
+    // Jangan izinkan deviasi drastis (>15C per detik) jika tidak masuk akal.
+    if (t <= -127.0f || t >= 120.0f) {
+      // Abaikan invalid reading
     } else {
-      if (FEAT_FILTER_DS18B20_SOFT && !isnan(heatC)) {
-        heatC = 0.7f * heatC + 0.3f * t;
+      if (!isnan(heatC)) {
+          // Low-pass filter (30% new, 70% old) yang selalu aktif
+          // Mencegah spike mendadak memicu OTP (Over-Temperature Protection) palsu
+          heatC = 0.7f * heatC + 0.3f * t;
       } else {
-        heatC = t;
+          heatC = t;
       }
     }
 

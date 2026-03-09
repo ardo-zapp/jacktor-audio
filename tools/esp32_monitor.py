@@ -493,6 +493,18 @@ class ESP32Monitor:
         elif action == "pwr-off":
             self.send_command({"power": False})
 
+        # Sleep Timer
+        elif action == "sleep":
+            if not args:
+                self.log_print("Usage: sleep <minutes>")
+                return
+            try:
+                minutes = int(args[0])
+                self.send_command({"sleep_timer": minutes})
+                self.log_print(f"Set sleep timer to {minutes} minutes")
+            except ValueError:
+                self.log_print("Invalid sleep minutes")
+
         # Speaker
         elif action == "spk-big":
             self.send_command({"spk_sel": "big"})
@@ -666,6 +678,7 @@ class ESP32Monitor:
             self.log_print("Power:", with_ts=False)
             self.log_print("  pwr-on              Nyalakan amplifier (main power ON)", with_ts=False)
             self.log_print("  pwr-off             Matikan amplifier (main power OFF)", with_ts=False)
+            self.log_print("  sleep <menit>       Set sleep timer auto power-off (mis. sleep 15)", with_ts=False)
             self.log_print("Speaker:", with_ts=False)
             self.log_print("  spk-big             Pilih speaker output BIG", with_ts=False)
             self.log_print("  spk-small           Pilih speaker output SMALL", with_ts=False)

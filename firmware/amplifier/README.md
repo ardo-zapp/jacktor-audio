@@ -1,15 +1,18 @@
-# Jacktor Audio - Amplifier Firmware (ESP32)
+# Unit Amplifier (ESP32)
 
-Firmware untuk board Jacktor Audio Amplifier. Memonitor sensor (DS18B20 secara asinkron/non-blocking), ADC ADS1115 (voltage SMPS dan 12V), serta mengatur FAN PWM berdasarkan suhu dan perlindungan speaker (protection).
+Firmware ini bertugas sebagai *Core Engine* atau ECU dari ekosistem Jacktor Audio. Tidak memiliki antarmuka grafis besar (hanya U8g2 I2C OLED statis), melainkan fokus pada waktu tanggap *real-time* (RTOS) untuk pembacaan sensor dan komputasi FFT 32-Band I2S.
 
-## Konektivitas
-- Komunikasi dengan Bridge (ESP32-S3) melalui UART2.
-- Mengirim telemetri (suhu, daya, status, analyzer) dalam bentuk JSON.
-- Mendapatkan perintah (mode fan, power on/off) dari PC/Bridge.
+## Sistem Keamanan Lanjutan (Safety Features)
+- **Over-Temperature Protection (OTP)**: Jika sensor `DS18B20` mendeteksi suhu *heatsink* menembus 85°C (setelah disaring *low-pass filter*), amplifier akan melakukan *Force Shutdown* mendadak mematikan relay dan membunyikan alarm.
+- **SMPS Hardware Fault**: Membaca logic dari optocoupler (menggunakan pin `SMPS_FAULT_PIN` yang sebelumnya `PC_DETECT_PIN`). Jika opto menyala akibat LED limit arus atau konslet SMPS, Amplifier secara **instan melakukan shutdown paksa** untuk melindungi motherboard.
+- **Anti-Stall Fan Control**: *Minimum duty cycle* kipas PWM dipatok pada `450` (rentang 0-1023). Hal ini menjamin bilah kipas terus bergulir pelan mendisipasikan sisa inersia panas pada suhu di bawah 40°C. Waktu tes lonjakan *kickstart* saat boot dinaikkan menjadi 5 detik.
+- **Asynchronous Sensor Polling**: DallasTemperature kini dijalankan menggunakan format `setWaitForConversion(false)`. Penghapusan sifat pemblokiran ini melancarkan ritme loop agar data telemetri 30Hz ke Panel tidak pernah macet.
+- **Sleep Timer**: Panel Bridge dapat mengirimkan menit parameter (15..120). ESP32 Amplifier akan mencatat *target epoch* ke depan berbasis RTC, dan akan secara otomatis membunuh daya listrik relay jika batas waktu terlewati.
 
-## Fitur Terkini
-- **Cold Boot Fan Test**: Saat unit dihidupkan, kipas akan diberi daya penuh selama 5 detik agar memutar kencang awal (kickstart).
-- **Anti-Stall Fan Duty**: Nilai mininum kipas PWM diset ke 450/1023 agar pada suhu rendah di bawah 40°C bilah tetap terus berputar halus tanpa berhenti yang bisa menyebabkan inersia panas terlambat dihempaskan.
-- **Asynchronous Temperature Probe**: `DS18B20` tidak lagi mem-blok RTOS karena menggunakan `setWaitForConversion(false)`.
+## Protokol Komunikasi JSON
 
-(Lihat konfigurasi teknis lainnya di `include/config.h`)
+Amplifier berjalan pada Baud Rate **921,600**. Secara rutin memuntahkan paket:
+1. **`rt` (Realtime) ~ 30 Hz**: Memuat 32 array FFT Band, status VU, dan mode Input (BT/AUX).
+2. **`hz1` (Lambat) ~ 1 Hz**: Memuat tegangan SMPS/12V, sisa menit dari `sleep_timer`, suhu `heat_c`, mode power, dan array `errors[]` (jika perlindungan speaker rusak).
+
+Jika Panel Bridge mengirim perintah (e.g. `{"type":"cmd","cmd":{"power":false}}`), unit Amplifier akan membunyikan `buzzerClick()` sebagai penanda bahwa instruksi berhasil dijalankan secara fisik.

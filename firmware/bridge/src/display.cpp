@@ -9,13 +9,16 @@
 
 static TFT_eSPI tft = TFT_eSPI(TFT_WIDTH, TFT_HEIGHT);
 
-// Gunakan SPI terpisah (VSPI) untuk Touchscreen
-static SPIClass touchSPI(VSPI);
+// Gunakan SPI terpisah (HSPI / SPI3) untuk Touchscreen pada ESP32-S3
+// S3 tidak memiliki VSPI, melainkan FSPI dan HSPI
+static SPIClass touchSPI(HSPI);
 static XPT2046_Touchscreen ts(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 
-// Buffer LVGL 9.x (S3 punya banyak RAM, bisa full buffer / half buffer)
-#define DRAW_BUF_SIZE (TFT_WIDTH * TFT_HEIGHT / 10 * (LV_COLOR_DEPTH / 8))
-static uint8_t draw_buf[DRAW_BUF_SIZE];
+// Full-screen Double Buffering using PSRAM
+// 320 x 240 pixels * 2 bytes (RGB565 16-bit) = ~153.6 KB per buffer
+#define DRAW_BUF_SIZE (TFT_WIDTH * TFT_HEIGHT * 2)
+static uint8_t *draw_buf_1;
+static uint8_t *draw_buf_2;
 
 static lv_display_t *disp;
 static lv_indev_t *indev;
@@ -37,16 +40,23 @@ static lv_obj_t * label_bt;
 static lv_obj_t * btn_prev;
 static lv_obj_t * btn_play;
 static lv_obj_t * btn_next;
+static lv_obj_t * btn_sleep;
+static lv_obj_t * label_sleep;
 
 static lv_obj_t * ta_ssid;
 static lv_obj_t * ta_pass;
 static lv_obj_t * kb;
 static lv_obj_t * label_ip;
+static lv_obj_t * label_error;
 
 // State Tracking for toggles
 static bool state_power_on = false;
 static bool state_spk_big = true;
 static bool state_bt_on = true;
+
+// State Sleep Timer UI
+static const uint32_t sleep_cycles[] = {0, 15, 30, 45, 60, 90, 120};
+static uint8_t sleep_idx = 0;
 
 // --- State Backlight & Log Boot ---
 static uint16_t logCursorY = 0;
@@ -137,6 +147,13 @@ static void btn_btctrl_event_cb(lv_event_t * e) {
   }
 }
 
+static void btn_sleep_event_cb(lv_event_t * e) {
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        sleep_idx = (sleep_idx + 1) % (sizeof(sleep_cycles) / sizeof(sleep_cycles[0]));
+        send_cmd("sleep_timer", sleep_cycles[sleep_idx]);
+    }
+}
+
 static void btn_sync_event_cb(lv_event_t * e) {
   if(lv_event_get_code(e) == LV_EVENT_CLICKED) {
     netSyncRTC();
@@ -221,17 +238,55 @@ static void handle_backlight_fade() {
       if (current_pwm < target_pwm) current_pwm++;
       else current_pwm--;
 
-      ledcWrite(0, current_pwm);
+      ledcWrite(0, current_pwm); // channel 0
       last_fade_ms = now;
     }
   }
 }
 
 static void build_ui() {
-  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(0x080B0E), LV_PART_MAIN);
+  // Global Background with Gradient and glow style
+  lv_obj_t * screen = lv_screen_active();
+  lv_obj_set_style_bg_color(screen, lv_color_hex(0x040608), LV_PART_MAIN);
+  lv_obj_set_style_bg_grad_color(screen, lv_color_hex(0x0A1018), LV_PART_MAIN);
+  lv_obj_set_style_bg_grad_dir(screen, LV_GRAD_DIR_VER, LV_PART_MAIN);
+
+  // Create default button style for modern look (glow + rounded + transitions)
+  static lv_style_t style_btn;
+  lv_style_init(&style_btn);
+  lv_style_set_radius(&style_btn, 8);
+  lv_style_set_bg_opa(&style_btn, 255);
+  lv_style_set_bg_color(&style_btn, lv_color_hex(0x112233));
+  lv_style_set_bg_grad_color(&style_btn, lv_color_hex(0x0A1520));
+  lv_style_set_bg_grad_dir(&style_btn, LV_GRAD_DIR_VER);
+  lv_style_set_border_width(&style_btn, 1);
+  lv_style_set_border_color(&style_btn, lv_color_hex(0x00CFFF));
+  lv_style_set_border_opa(&style_btn, LV_OPA_50);
+  lv_style_set_shadow_width(&style_btn, 10);
+  lv_style_set_shadow_color(&style_btn, lv_color_hex(0x00CFFF));
+  lv_style_set_shadow_opa(&style_btn, LV_OPA_0); // Glow off initially
+  lv_style_set_text_color(&style_btn, lv_color_hex(0xFFFFFF));
+
+  // Transition settings for smooth button pressing
+  static const lv_style_prop_t props[] = {LV_STYLE_SHADOW_OPA, LV_STYLE_BG_COLOR, LV_STYLE_PROP_INV};
+  static lv_style_transition_dsc_t trans;
+  lv_style_transition_dsc_init(&trans, props, lv_anim_path_ease_in_out, 200, 0, NULL);
+  lv_style_set_transition(&style_btn, &trans);
+
+  // Pressed style overrides
+  static lv_style_t style_btn_pr;
+  lv_style_init(&style_btn_pr);
+  lv_style_set_shadow_opa(&style_btn_pr, LV_OPA_80); // Glow turns on
+  lv_style_set_bg_color(&style_btn_pr, lv_color_hex(0x005577)); // Lighter bg
+  lv_style_set_border_color(&style_btn_pr, lv_color_hex(0x00FFFF));
+
+  // Helper macro to apply modern style
+  #define APPLY_BTN_STYLE(btn) \
+    lv_obj_add_style(btn, &style_btn, LV_PART_MAIN); \
+    lv_obj_add_style(btn, &style_btn_pr, LV_PART_MAIN | LV_STATE_PRESSED)
 
   // Bagian Header (Status)
-  label_temp = lv_label_create(lv_screen_active());
+  label_temp = lv_label_create(screen);
   lv_label_set_text(label_temp, "Temp: -- C");
   lv_obj_set_style_text_color(label_temp, lv_color_hex(0x00CFFF), LV_PART_MAIN);
   lv_obj_align(label_temp, LV_ALIGN_TOP_LEFT, 5, 5);
@@ -245,6 +300,12 @@ static void build_ui() {
   lv_label_set_text(label_mode, "AUX");
   lv_obj_set_style_text_color(label_mode, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
   lv_obj_align(label_mode, LV_ALIGN_TOP_RIGHT, -5, 5);
+
+  // Label Peringatan Error (Disembunyikan default)
+  label_error = lv_label_create(screen);
+  lv_label_set_text(label_error, "");
+  lv_obj_set_style_text_color(label_error, lv_color_hex(0xFF0000), LV_PART_MAIN); // Merah terang
+  lv_obj_align(label_error, LV_ALIGN_TOP_RIGHT, -5, 25);
 
   // Tabview Header (Bottom or Top) di LVGL 9
   lv_obj_t * tabview = lv_tabview_create(lv_screen_active());
@@ -265,8 +326,15 @@ static void build_ui() {
   lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 255);
   lv_chart_set_point_count(chart, 32);
   ser = lv_chart_add_series(chart, lv_color_hex(0x00CFFF), LV_CHART_AXIS_PRIMARY_Y);
-  // Default bar values
-  for(int i=0; i<32; i++) lv_chart_set_next_value(chart, ser, 0);
+
+  // Default bar values using direct array mutation (LVGL 9 compatibility)
+  int32_t * init_y = lv_chart_get_y_array(chart, ser);
+  if (init_y) {
+      for(int i=0; i<32; i++) {
+          init_y[i] = 0;
+      }
+      lv_chart_refresh(chart);
+  }
 
   // === TAB SETTINGS ===
   lv_obj_set_flex_flow(tab_settings, LV_FLEX_FLOW_COLUMN);
@@ -324,6 +392,7 @@ static void build_ui() {
   btn_spk = lv_button_create(tab_home);
   lv_obj_set_size(btn_spk, 110, 40);
   lv_obj_align(btn_spk, LV_ALIGN_CENTER, -60, -10);
+  APPLY_BTN_STYLE(btn_spk);
   lv_obj_add_event_cb(btn_spk, btn_spk_event_cb, LV_EVENT_ALL, NULL);
   label_spk = lv_label_create(btn_spk);
   lv_label_set_text(label_spk, LV_SYMBOL_VOLUME_MID " SPK:BIG");
@@ -332,15 +401,27 @@ static void build_ui() {
   btn_bt = lv_button_create(tab_home);
   lv_obj_set_size(btn_bt, 110, 40);
   lv_obj_align(btn_bt, LV_ALIGN_CENTER, 60, -10);
+  APPLY_BTN_STYLE(btn_bt);
   lv_obj_add_event_cb(btn_bt, btn_bt_event_cb, LV_EVENT_ALL, NULL);
   label_bt = lv_label_create(btn_bt);
   lv_label_set_text(label_bt, LV_SYMBOL_BLUETOOTH " BT:ON");
   lv_obj_center(label_bt);
 
+  // Sleep Timer Button
+  btn_sleep = lv_button_create(tab_home);
+  lv_obj_set_size(btn_sleep, 90, 30);
+  lv_obj_align(btn_sleep, LV_ALIGN_TOP_RIGHT, 0, 5);
+  APPLY_BTN_STYLE(btn_sleep);
+  lv_obj_add_event_cb(btn_sleep, btn_sleep_event_cb, LV_EVENT_ALL, NULL);
+  label_sleep = lv_label_create(btn_sleep);
+  lv_label_set_text(label_sleep, LV_SYMBOL_BELL " SLP:OFF");
+  lv_obj_center(label_sleep);
+
   // Row BT Controls (Prev, Play, Next)
   btn_prev = lv_button_create(tab_home);
   lv_obj_set_size(btn_prev, 60, 40);
   lv_obj_align(btn_prev, LV_ALIGN_CENTER, -80, 40);
+  APPLY_BTN_STYLE(btn_prev);
   lv_obj_add_event_cb(btn_prev, btn_btctrl_event_cb, LV_EVENT_ALL, NULL);
   lv_obj_t * lbl = lv_label_create(btn_prev);
   lv_label_set_text(lbl, LV_SYMBOL_PREV);
@@ -349,6 +430,7 @@ static void build_ui() {
   btn_play = lv_button_create(tab_home);
   lv_obj_set_size(btn_play, 80, 40);
   lv_obj_align(btn_play, LV_ALIGN_CENTER, 0, 40);
+  APPLY_BTN_STYLE(btn_play);
   lv_obj_add_event_cb(btn_play, btn_btctrl_event_cb, LV_EVENT_ALL, NULL);
   lbl = lv_label_create(btn_play);
   lv_label_set_text(lbl, LV_SYMBOL_PLAY);
@@ -357,6 +439,7 @@ static void build_ui() {
   btn_next = lv_button_create(tab_home);
   lv_obj_set_size(btn_next, 60, 40);
   lv_obj_align(btn_next, LV_ALIGN_CENTER, 80, 40);
+  APPLY_BTN_STYLE(btn_next);
   lv_obj_add_event_cb(btn_next, btn_btctrl_event_cb, LV_EVENT_ALL, NULL);
   lbl = lv_label_create(btn_next);
   lv_label_set_text(lbl, LV_SYMBOL_NEXT);
@@ -366,6 +449,7 @@ static void build_ui() {
   btn_power = lv_button_create(tab_home);
   lv_obj_set_size(btn_power, 280, 40);
   lv_obj_align(btn_power, LV_ALIGN_BOTTOM_MID, 0, -5);
+  APPLY_BTN_STYLE(btn_power);
   lv_obj_add_event_cb(btn_power, btn_power_event_cb, LV_EVENT_ALL, NULL);
   label_power = lv_label_create(btn_power);
   lv_label_set_text(label_power, LV_SYMBOL_POWER " POWER");
@@ -379,9 +463,11 @@ void displayInit() {
   tft.fillScreen(TFT_BLACK);
 
   // Nyalakan Backlight menggunakan LEDC PWM agar bisa animasi meredup (fade out)
-  ledcSetup(0, 5000, 8); // Channel 0, 5KHz, 8-bit res (0-255)
+  // Walaupun Core 3.0 menggunakan ledcAttach, PlatformIO ESP32 (framework-arduinoespressif32)
+  // yang ditarik saat ini masih v2.x. Kita akan fallback menggunakan API v2.x (ledcSetup).
+  ledcSetup(0, 5000, 8);
   ledcAttachPin(TFT_BL, 0);
-  ledcWrite(0, 255); // Full brightness awal
+  ledcWrite(0, 255);
   current_pwm = target_pwm = 255;
   backlight_state = true;
   ui_initialized = false;
@@ -397,10 +483,29 @@ void displayInit() {
   // Inisiasi LVGL 9.x
   lv_init();
 
-  // Buat Display Driver baru LVGL 9.x
-  disp = lv_display_create(TFT_HEIGHT, TFT_WIDTH); // Landscape: w=320, h=240
-  lv_display_set_flush_cb(disp, my_disp_flush);
-  lv_display_set_buffers(disp, draw_buf, NULL, sizeof(draw_buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+  // Set LVGL tick provider to Arduino millis()
+  lv_tick_set_cb((lv_tick_get_cb_t)millis);
+
+  // Alokasikan memori frame buffer ke PSRAM
+  displayBootLog("[ WAIT ] Allocating Double Buffers in PSRAM...");
+  draw_buf_1 = (uint8_t*)heap_caps_malloc(DRAW_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  draw_buf_2 = (uint8_t*)heap_caps_malloc(DRAW_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+  if (draw_buf_1 == NULL || draw_buf_2 == NULL) {
+      displayBootLog("[ ERR ] PSRAM Allocation Failed! Fallback to internal RAM...");
+      // Fallback ke SRAM jika PSRAM gagal diinisialisasi
+      draw_buf_1 = (uint8_t*)heap_caps_malloc(DRAW_BUF_SIZE / 10, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+      draw_buf_2 = NULL;
+      disp = lv_display_create(TFT_HEIGHT, TFT_WIDTH);
+      lv_display_set_flush_cb(disp, my_disp_flush);
+      lv_display_set_buffers(disp, draw_buf_1, NULL, DRAW_BUF_SIZE / 10, LV_DISPLAY_RENDER_MODE_PARTIAL);
+  } else {
+      displayBootLog("[ OK ] PSRAM Allocated. Full-screen Direct Mode Enabled.");
+      disp = lv_display_create(TFT_HEIGHT, TFT_WIDTH); // Landscape: w=320, h=240
+      lv_display_set_flush_cb(disp, my_disp_flush);
+      // Menggunakan FULL render mode untuk meminimalisir tearing karena kita pakai double buffer 100% ukuran layar
+      lv_display_set_buffers(disp, draw_buf_1, draw_buf_2, DRAW_BUF_SIZE, LV_DISPLAY_RENDER_MODE_FULL);
+  }
 
   // Buat Touch Input Driver baru LVGL 9.x
   indev = lv_indev_create();
@@ -408,12 +513,14 @@ void displayInit() {
   lv_indev_set_read_cb(indev, my_touchpad_read);
 
   // Buat Antarmuka
-  displayBootLog("[ OK ] Generating LVGL Interface...");
+  displayBootLog("[ WAIT ] Generating LVGL Interface...");
   build_ui();
-  displayBootLog("[ OK ] System Ready.");
+}
 
+void displayStartUI() {
+  displayBootLog("[ OK ] System Ready.");
   // Berikan jeda sebentar agar log terakhir terlihat sebelum ditutup UI
-  delay(500);
+  delay(800);
   ui_initialized = true;
 }
 
@@ -450,10 +557,15 @@ void displayUpdateTelemetry(const JsonDocument& doc) {
       JsonArrayConst bands = rt["bands"];
       size_t count = bands.size();
       if (count > 32) count = 32;
-      for (size_t i=0; i<count; i++) {
-        lv_chart_set_value_by_id(chart, ser, i, bands[i]);
+
+      // lv_chart_set_value_by_id dihapus di LVGL 9, cara baru adalah mengakses array-nya langsung
+      int32_t * y_array = lv_chart_get_y_array(chart, ser);
+      if (y_array) {
+          for (size_t i=0; i<count; i++) {
+              y_array[i] = bands[i].as<int32_t>();
+          }
+          lv_chart_refresh(chart);
       }
-      lv_chart_refresh(chart);
     }
   }
 
@@ -491,6 +603,36 @@ void displayUpdateTelemetry(const JsonDocument& doc) {
 
         state_bt_on = inputs["bt"] | false;
         lv_label_set_text(label_bt, state_bt_on ? "BT: ON" : "BT: OFF");
+    }
+
+    // Update Sleep Timer Tracker
+    uint32_t sleep_remaining = hz1["sleep_timer"] | 0;
+    if (sleep_remaining == 0) {
+        lv_label_set_text(label_sleep, LV_SYMBOL_BELL " SLP:OFF");
+        lv_obj_set_style_text_color(label_sleep, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
+    } else {
+        char slpBuf[32];
+        snprintf(slpBuf, sizeof(slpBuf), LV_SYMBOL_BELL " %dm", sleep_remaining);
+        lv_label_set_text(label_sleep, slpBuf);
+        lv_obj_set_style_text_color(label_sleep, lv_color_hex(0xFF8800), LV_PART_MAIN); // Orange jika aktif
+    }
+
+    // Parsing Errors
+    if (hz1["errors"].is<JsonArray>()) {
+        JsonArrayConst errs = hz1["errors"];
+        if (errs.size() > 0) {
+            String err_str = LV_SYMBOL_WARNING " ";
+            for (size_t i=0; i<errs.size(); i++) {
+                err_str += errs[i].as<String>();
+                if (i < errs.size() - 1) err_str += ", ";
+            }
+            lv_label_set_text(label_error, err_str.c_str());
+            lv_obj_remove_flag(label_error, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(label_error, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else {
+        lv_obj_add_flag(label_error, LV_OBJ_FLAG_HIDDEN);
     }
   }
 }

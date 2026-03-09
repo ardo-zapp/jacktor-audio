@@ -1,17 +1,44 @@
 #include "comms.h"
 #include "config.h"
 #include "display.h"
+#include "USB.h"
 
 String hostRxBuffer;
 String ampRxBuffer;
 String lastAmpTelemetry;
 
-static bool pcAsleep = false;
-static uint32_t lastPcActiveMs = 0;
+static void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+  if (event_base == ARDUINO_USB_EVENTS) {
+    switch (event_id) {
+      case ARDUINO_USB_SUSPEND_EVENT:
+        displaySetBacklight(false);
+        // PC terdeteksi Sleep, matikan amplifier
+        {
+          JsonDocument doc;
+          doc["type"] = "cmd";
+          doc["cmd"]["power"] = false;
+          commsSendAmpCommand(doc);
+        }
+        break;
+      case ARDUINO_USB_RESUME_EVENT:
+        displaySetBacklight(true);
+        // PC bangun, nyalakan amplifier
+        {
+          JsonDocument doc;
+          doc["type"] = "cmd";
+          doc["cmd"]["power"] = true;
+          commsSendAmpCommand(doc);
+        }
+        break;
+    }
+  }
+}
 
 void commsInit() {
   Serial.begin(HOST_SERIAL_BAUD); // USB CDC Native
   Serial1.begin(AMP_SERIAL_BAUD, SERIAL_8N1, PIN_UART_AMP_RX, PIN_UART_AMP_TX);
+
+  USB.onEvent(usbEventCallback);
 
   hostRxBuffer.reserve(BRIDGE_MAX_FRAME);
   ampRxBuffer.reserve(BRIDGE_MAX_FRAME);
@@ -70,36 +97,11 @@ void commsTick(uint32_t now) {
   }
 
   // Service HOST USB
-  // Native USB ESP32-S3 memberikan dtr() & rts() dari koneksi port.
-  // Jika port ditutup (atau PC sleep/tercabut), bool(Serial) akan bernilai false
-  if (Serial) {
-    lastPcActiveMs = now;
-    if (pcAsleep) {
-      pcAsleep = false;
-      // PC Bangun, hidupkan layar panel
-      displaySetBacklight(true);
-
-      JsonDocument doc;
-      JsonObject root = doc.to<JsonObject>();
-      root["type"] = "cmd";
-      root["cmd"]["power"] = true;
-      commsSendAmpCommand(doc);
-    }
-  } else {
-    // Jika tidak ada koneksi CDC terhubung selama timeout, anggap Sleep/Mati
-    if (!pcAsleep && (now - lastPcActiveMs >= PC_SLEEP_TIMEOUT_MS)) {
-      pcAsleep = true;
-      // PC Sleep, redupkan layar panel untuk hemat daya (Standby UI)
-      displaySetBacklight(false);
-
-      // Kirim auto-off command ke Amp
-      JsonDocument doc;
-      JsonObject root = doc.to<JsonObject>();
-      root["type"] = "cmd";
-      root["cmd"]["power"] = false;
-      commsSendAmpCommand(doc);
-    }
-  }
+  // Karena fitur PC Detect sebelumnya mengandalkan OTG, pada Native USB CDC `bool(Serial)`
+  // hanya bernilai true jika DTR (Data Terminal Ready) aktif / aplikasi Terminal terbuka.
+  // Untuk mencegah amplifier mati tiba-tiba saat dicolokkan ke Charger biasa atau terminal ditutup,
+  // kita nonaktifkan pengiriman auto power off dari Bridge ini.
+  // Biarkan fitur PC Detect ditangani murni dari input hardware PC_DETECT_PIN di unit Amplifier secara mandiri.
 
   while (Serial.available()) {
     char c = static_cast<char>(Serial.read());

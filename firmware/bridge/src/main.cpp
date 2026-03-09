@@ -13,6 +13,9 @@ void setup() {
 
   displayBootLog("[ WAIT ] Negotiating Amplifier Link...");
   delay(1000); // Simulasi tunggu sebentar
+
+  // Akhiri proses boot dan mulai render UI LVGL
+  displayStartUI();
 }
 
 void loop() {

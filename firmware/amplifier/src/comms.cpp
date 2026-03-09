@@ -132,12 +132,10 @@ static void writeNvsSnapshot(JsonObject root) {
 
 static void writeFeatures(JsonObject root) {
   JsonObject feats = root["features"].to<JsonObject>();
-  feats["pc_detect"] = static_cast<bool>(FEAT_PC_DETECT_ENABLE);
   feats["bt_autoswitch"] = static_cast<bool>(FEAT_BT_AUTOSWITCH_AUX);
   feats["fan_boot_test"] = static_cast<bool>(FEAT_FAN_BOOT_TEST);
   feats["factory_reset_combo"] = static_cast<bool>(FEAT_FACTORY_RESET_COMBO);
   feats["rtc_temp"] = static_cast<bool>(FEAT_RTC_TEMP_TELEMETRY);
-  feats["rtc_sync_policy"] = static_cast<bool>(FEAT_RTC_SYNC_POLICY);
   feats["smps_protect"] = static_cast<bool>(FEAT_SMPS_PROTECT_ENABLE);
   feats["ds18b20_softfilter"] = static_cast<bool>(FEAT_FILTER_DS18B20_SOFT);
   feats["safe_mode"] = static_cast<bool>(SAFE_MODE_SOFT);
@@ -151,6 +149,8 @@ static void writeErrors(JsonArray arr) {
   }
   if (isnan(getHeatsinkC())) arr.add("SENSOR_FAIL");
   if (powerSpkProtectFault()) arr.add("SPEAKER_PROTECT_FAIL");
+  if (powerOtpFault()) arr.add("OVER_TEMP_FAULT");
+  if (powerSmpsHwFaultLatched()) arr.add("SMPS_HW_FAULT");
 }
 
 static void writeAnalyzer(JsonObject data) {
@@ -273,6 +273,8 @@ static void sendSlowTelemetry(uint32_t now) {
   smps["v"] = getVoltageInstant();
   smps["stage"] = powerSmpsTripLatched() ? "trip" : (powerIsOn() ? "armed" : "standby");
   smps["cutoff"] = stateSmpsCutoffV();
+
+  data["sleep_timer"] = powerGetSleepRemainingMinutes();
   smps["recover"] = stateSmpsRecoveryV();
 
   data["v12"] = getVoltage12V();
@@ -290,14 +292,6 @@ static void sendSlowTelemetry(uint32_t now) {
 
   JsonArray errs = data["errors"].to<JsonArray>();
   writeErrors(errs);
-
-  JsonObject pc = data["pc_detect"].to<JsonObject>();
-  pc["enabled"] = static_cast<bool>(FEAT_PC_DETECT_ENABLE);
-  pc["armed"] = powerPcDetectArmed();
-  pc["level"] = powerPcDetectLevelActive() ? "LOW" : "HIGH";
-  uint32_t lastChange = powerPcDetectLastChangeMs();
-  if (lastChange == 0) pc["last_change_ms"] = nullptr;
-  else pc["last_change_ms"] = now - lastChange;
 
   writeAnalyzer(data);
   writeBuzzer(data);
@@ -320,6 +314,8 @@ static void sendAckOk(const char *key, const TValue &value, bool tone = true) {
   root["changed"] = key;
   root["value"] = value;
   sendTelemetry(root);
+  // Bunyikan buzzer setiap perintah ter-handle sukses
+  // (bukan di level parsing raw string agar tak ikut bunyi saat menerima data OTA)
   if (tone) playAckTone();
 }
 
@@ -479,29 +475,6 @@ static void handleRtcSync(uint32_t targetEpoch) {
   }
 
   int32_t offset = (int32_t)((int64_t)targetEpoch - (int64_t)currentEpoch);
-  int32_t absOffset = offset >= 0 ? offset : -offset;
-  if (!FEAT_RTC_SYNC_POLICY) {
-    if (!sensorsSetUnixTime(targetEpoch)) {
-      sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
-      return;
-    }
-    stateSetLastRtcSync(targetEpoch);
-    sendLogInfoOffset(offset);
-    forceTel = true;
-    return;
-  }
-  if (absOffset <= RTC_SYNC_MIN_OFFS_SEC) {
-    sendLogWarnReason("rtc_sync_skipped", "offset_small");
-    return;
-  }
-
-  const uint32_t minInterval = (uint32_t)RTC_SYNC_MIN_INTERVAL_H * 3600UL;
-  uint32_t last = stateLastRtcSync();
-  uint32_t ref = (targetEpoch > currentEpoch) ? targetEpoch : currentEpoch;
-  if (last != 0 && (ref - last) < minInterval) {
-    sendLogWarnReason("rtc_sync_skipped", "ratelimited");
-    return;
-  }
 
   if (!sensorsSetUnixTime(targetEpoch)) {
     sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
@@ -514,26 +487,19 @@ static void handleRtcSync(uint32_t targetEpoch) {
 }
 
 // Force sync RTC (bypass rate limit)
-static void handleRtcSyncForce(uint32_t targetEpoch) {
-  uint32_t currentEpoch = 0;
-  sensorsGetUnixTime(currentEpoch);
-  
-  if (!sensorsSetUnixTime(targetEpoch)) {
-    sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
-    return;
-  }
-  
-  int32_t offset = (int32_t)((int64_t)targetEpoch - (int64_t)currentEpoch);
-  stateSetLastRtcSync(targetEpoch);
-  sendLogInfoOffset(offset);
-  forceTel = true;
-}
-
 static void handleCmdPower(JsonVariant v) {
   if (!v.is<bool>()) { sendAckErr("power", "invalid"); return; }
   bool on = v.as<bool>();
   powerSetMainRelay(on, PowerChangeReason::Command);
   sendAckOk("power", on);
+  forceTel = true;
+}
+
+static void handleCmdSleepTimer(JsonVariant v) {
+  if (!v.is<uint32_t>()) { sendAckErr("sleep_timer", "invalid"); return; }
+  uint32_t minutes = v.as<uint32_t>();
+  powerSetSleepTimer(minutes);
+  sendAckOk("sleep_timer", minutes);
   forceTel = true;
 }
 
@@ -637,7 +603,7 @@ static void handleCmdRtcSet(JsonVariant v) {
 static void handleCmdRtcSetEpoch(JsonVariant v) {
   if (!variantIsNumber(v)) { sendAckErr("rtc_set_epoch", "invalid"); return; }
   uint32_t epoch = v.as<uint32_t>();
-  handleRtcSyncForce(epoch);
+  handleRtcSync(epoch);
 }
 
 static void handleCmdBuzz(JsonVariant v) {
@@ -796,7 +762,10 @@ static void handleJsonLine(const String &line) {
   JsonObject cmd = root["cmd"];
   if (cmd.isNull()) return;
 
+  // Bunyikan buzzer dipindahkan ke fungsi sendAckOk untuk menghindari spam saat OTA/Telemetry
+
   HANDLE_IF_PRESENT("power", handleCmdPower);
+  HANDLE_IF_PRESENT("sleep_timer", handleCmdSleepTimer);
   HANDLE_IF_PRESENT("bt", handleCmdBt);
   HANDLE_IF_PRESENT("spk_sel", handleCmdSpkSel);
   HANDLE_IF_PRESENT("spk_pwr", handleCmdSpkPwr);
