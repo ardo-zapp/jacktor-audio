@@ -1,18 +1,18 @@
 # Unit Amplifier (ESP32)
 
-Firmware ini bertugas sebagai *Core Engine* atau ECU dari ekosistem Jacktor Audio. Tidak memiliki antarmuka grafis besar (hanya U8g2 I2C OLED statis), melainkan fokus pada waktu tanggap *real-time* (RTOS) untuk pembacaan sensor dan komputasi FFT 32-Band I2S.
+Firmware ini berfungsi sebagai unit kontrol pusat (*Electronic Control Unit* / ECU) pada ekosistem Jacktor Audio. Didesain secara *headless* (hanya dibantu indikator OLED minimalis via I2C), modul ini dititikberatkan pada presisi *Real-Time Operating System* (RTOS) guna mengeksekusi konversi data *Analog-to-Digital* I2S, kalkulasi FFT 32-Band, dan akuisisi data termal.
 
-## Sistem Keamanan Lanjutan (Safety Features)
-- **Over-Temperature Protection (OTP)**: Jika sensor `DS18B20` mendeteksi suhu *heatsink* menembus 85°C (setelah disaring *low-pass filter*), amplifier akan melakukan *Force Shutdown* mendadak mematikan relay dan membunyikan alarm.
-- **SMPS Hardware Fault**: Membaca logic dari optocoupler (menggunakan pin `SMPS_FAULT_PIN` yang sebelumnya `PC_DETECT_PIN`). Jika opto menyala akibat LED limit arus atau konslet SMPS, Amplifier secara **instan melakukan shutdown paksa** untuk melindungi motherboard.
-- **Anti-Stall Fan Control**: *Minimum duty cycle* kipas PWM dipatok pada `450` (rentang 0-1023). Hal ini menjamin bilah kipas terus bergulir pelan mendisipasikan sisa inersia panas pada suhu di bawah 40°C. Waktu tes lonjakan *kickstart* saat boot dinaikkan menjadi 5 detik.
-- **Asynchronous Sensor Polling**: DallasTemperature kini dijalankan menggunakan format `setWaitForConversion(false)`. Penghapusan sifat pemblokiran ini melancarkan ritme loop agar data telemetri 30Hz ke Panel tidak pernah macet.
-- **Sleep Timer**: Panel Bridge dapat mengirimkan menit parameter (15..120). ESP32 Amplifier akan mencatat *target epoch* ke depan berbasis RTC, dan akan secara otomatis membunuh daya listrik relay jika batas waktu terlewati.
+## Manajemen Keselamatan Sistem (*Hardware Safety Features*)
+- **Over-Temperature Protection (OTP)**: Berfungsi melacak batasan termal *heatsink* melalui sensor `DS18B20`. Jika suhu mencapai ambang kritis 85°C (setelah melalui proses *low-pass filter*), amplifier akan menginisiasi putus-daya darurat (*Force Shutdown*) guna mencegah malfungsi komponen semikonduktor, disertai dengan aktivasi alarm akustik.
+- **SMPS Hardware Fault**: Memanfaatkan sirkuit *optocoupler* (pada konfigurasi pin `SMPS_FAULT_PIN`) untuk memonitor indikator LED limit/hubung-singkat (*short-circuit*) dari suplai daya SMPS. Saat anomali tegangan terdeteksi, unit akan secara **instan mengeksekusi shutdown paksa** untuk mengamankan sirkuit.
+- **Anti-Stall Fan Control**: Pengendalian profil putaran kipas (*PWM duty cycle*) dialokasikan pada nilai dasar `450` (dari spektrum 0-1023). Hal ini menjamin putaran mekanis kipas tidak terhenti (bebas efek *stalling*) pada suhu kurang dari 40°C demi menjaga stabilitas peluruhan suhu. Implementasi tes lonjakan daya putar awal (*kickstart*) saat *booting* dipertahankan selama 5 detik.
+- **Asynchronous Sensor Polling**: Implementasi pembacaan suhu kini dikonfigurasi melalui metode *non-blocking* (`setWaitForConversion(false)`). Resolusi asinkron ini membebaskan instruksi tunggu pada *thread* utama, memastikan sirkulasi transmisi telemetri 30Hz ke Panel Bridge tidak mengalami hambatan komputasi.
+- **Sleep Timer Lifecycle**: Melalui sinkronisasi dari Panel Bridge (dalam interval 15 - 120 menit), sirkuit RTC ESP32 akan memverifikasi *target epoch time* secara mandiri, yang selanjutnya memutus pasokan daya relai sirkuit amplifier saat siklus berakhir.
 
-## Protokol Komunikasi JSON
+## Antarmuka Komunikasi JSON
 
-Amplifier berjalan pada Baud Rate **921,600**. Secara rutin memuntahkan paket:
-1. **`rt` (Realtime) ~ 30 Hz**: Memuat 32 array FFT Band, status VU, dan mode Input (BT/AUX).
-2. **`hz1` (Lambat) ~ 1 Hz**: Memuat tegangan SMPS/12V, sisa menit dari `sleep_timer`, suhu `heat_c`, mode power, dan array `errors[]` (jika perlindungan speaker rusak).
+Amplifier menggunakan protokol komunikasi asinkron *Full-Duplex* UART dengan laju *Baud Rate* **921,600 bps**, dan secara rutin mentransmisikan struktur paket:
+1. **`rt` (Realtime) ~ 30 Hz**: Memuat paket data array 32-Band FFT, status VU, dan mode persinyalan input (Bluetooth/AUX).
+2. **`hz1` (Diagnostic) ~ 1 Hz**: Memuat pembacaan tegangan catu daya (SMPS & 12V), sisa durasi *sleep timer*, derajat termal aktual (`heat_c`), status relai, serta parameter diagnotik `errors[]` (aktif saat deteksi kegagalan perangkat, e.g. *speaker protection* atau OTP).
 
-Jika Panel Bridge mengirim perintah (e.g. `{"type":"cmd","cmd":{"power":false}}`), unit Amplifier akan membunyikan `buzzerClick()` sebagai penanda bahwa instruksi berhasil dijalankan secara fisik.
+Setiap instruksi valid yang disalurkan dari antarmuka Panel Bridge (sebagai contoh: `{"type":"cmd","cmd":{"power":false}}`) akan disinkronisasikan bersama dengan *auditory feedback* pendek (`buzzerClick()`), yang mengkonfirmasi penyelesaian instruksi di ranah perangkat keras.
