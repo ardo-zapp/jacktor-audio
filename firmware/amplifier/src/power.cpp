@@ -27,8 +27,7 @@ static bool protectFaultLatched = false, protectFaultLogged = false;
 static uint32_t btLastEnteredBtMs = 0, btLastAuxMs = 0;
 static uint32_t btLowSinceMs = 0, btLossSinceMs = 0;
 
-static bool pcOn = false, pcRaw = false;
-static uint32_t pcLastRawMs = 0, pcGraceUntilMs = 0, pcOffSchedAt = 0;
+static bool smpsHwFaultLatched = false;
 
 static bool fanBootTestDone = false;
 static bool smpsFaultLatched = false, smpsCutActive = false;
@@ -79,11 +78,11 @@ static inline bool _readSpkProtectLedActiveHigh() {
 #endif
 }
 
-static inline bool _readPcDetectActiveLow() {
-#if PC_DETECT_ACTIVE_LOW
-  return digitalRead(PC_DETECT_PIN) == LOW;
+static inline bool _readSmpsFaultActive() {
+#if SMPS_FAULT_ACTIVE_LOW
+  return digitalRead(SMPS_FAULT_PIN) == LOW;
 #else
-  return digitalRead(PC_DETECT_PIN) == HIGH;
+  return digitalRead(SMPS_FAULT_PIN) == HIGH;
 #endif
 }
 
@@ -276,12 +275,8 @@ void powerInit() {
   digitalWrite(BT_BTN_NEXT_PIN, LOW);
 #endif
 
-  pinMode(PC_DETECT_PIN, PC_DETECT_INPUT_PULL);
-  pcRaw = _readPcDetectActiveLow();
-  pcOn = pcRaw;
-  pcLastRawMs = now;
-  pcGraceUntilMs = now + PC_DETECT_GRACE_MS;
-  pcOffSchedAt = 0;
+  pinMode(SMPS_FAULT_PIN, INPUT_PULLUP);
+  smpsHwFaultLatched = false;
 
   pinMode(SPK_PROTECT_LED_PIN, INPUT);
   spkProtectOk = _readSpkProtectLedActiveHigh();
@@ -360,6 +355,15 @@ void powerTick(const uint32_t now) {
 #endif
           }
       }
+  }
+
+  // SMPS Hardware Fault Detect (Opto)
+  if (powerIsOn() && _readSmpsFaultActive() && !smpsHwFaultLatched) {
+      smpsHwFaultLatched = true;
+      powerSetMainRelay(false, PowerChangeReason::Command);
+#if LOG_ENABLE
+      LOGF("[SMPS_HW_FAULT] CRITICAL SHORT/LIMIT! FORCE SHUTDOWN\n");
+#endif
   }
 
   // FAN: Run fanTick() to calculate duty based on mode
@@ -464,31 +468,6 @@ void powerTick(const uint32_t now) {
     }
   }
 
-  if (FEAT_PC_DETECT_ENABLE && !otaActive && !safeModeActive) {
-    bool raw = _readPcDetectActiveLow();
-    if (raw != pcRaw) {
-      pcRaw = raw;
-      pcLastRawMs = now;
-    }
-    if ((now - pcLastRawMs) >= PC_DETECT_DEBOUNCE_MS) {
-      if (raw != pcOn) {
-        pcOn = raw;
-        if (pcOn) {
-          pcGraceUntilMs = now + PC_DETECT_GRACE_MS;
-          powerSetMainRelay(true, PowerChangeReason::PcDetect);
-        } else {
-          pcOffSchedAt = now + PC_DETECT_GRACE_MS;
-        }
-      }
-    }
-    if (!pcOn && pcOffSchedAt != 0 && now >= pcOffSchedAt && now >= pcGraceUntilMs) {
-      powerSetMainRelay(false, PowerChangeReason::PcDetect);
-      pcOffSchedAt = 0;
-    }
-  } else {
-    pcOffSchedAt = 0;
-  }
-
   applyBtHardware(now);
   applySpeakerPower();
 }
@@ -512,7 +491,6 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
     spkProtectOk = true;
     smpsValidSince = 0;
     sleepTargetEpoch = 0; // Batalkan sleep timer jika manual mati
-    otpLatched = false;   // Reset proteksi suhu saat mati
   }
 
   applyRelay(on);
@@ -524,10 +502,9 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
     smpsFaultLatched = false;
     smpsFaultGraceUntilMs = 0;
     smpsValidSince = 0;
+    otpLatched = false;   // Reset proteksi saat power ditekan ulang oleh user
+    smpsHwFaultLatched = false;
     spkProtectArmUntilMs = millis() + SMPS_SOFTSTART_MS + SPK_PROTECT_ARM_MS;
-#if FEAT_PC_DETECT_ENABLE
-    pcGraceUntilMs = millis() + PC_DETECT_GRACE_MS;
-#endif
   }
 
   applyBtHardware(millis());
@@ -600,10 +577,8 @@ bool powerSpkProtectFault() {
 }
 
 const char* powerInputModeStr() { return btMode ? "bt" : "aux"; }
-bool powerPcDetectLevelActive() { return pcRaw; }
-bool powerPcDetectArmed() { return pcOn; }
-uint32_t powerPcDetectLastChangeMs() { return pcLastRawMs; }
 bool powerSmpsTripLatched() { return smpsFaultLatched; }
+bool powerSmpsHwFaultLatched() { return smpsHwFaultLatched; }
 
 void powerSmpsStartSoftstart(uint32_t msDelay) { smpsSoftstartUntilMs = millis() + msDelay; }
 bool powerSmpsSoftstartActive() { return millis() < smpsSoftstartUntilMs; }

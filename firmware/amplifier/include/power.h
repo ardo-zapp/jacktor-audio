@@ -23,10 +23,8 @@ bool powerBtMode();
 void powerSetOtaActive(bool on);
 bool powerSpkProtectFault();
 const char* powerInputModeStr();
-bool powerPcDetectLevelActive();
-bool powerPcDetectArmed();
-uint32_t powerPcDetectLastChangeMs();
 bool powerSmpsTripLatched();
+bool powerSmpsHwFaultLatched();
 bool powerOtpFault();
 
 void powerSetSleepTimer(uint32_t minutes);

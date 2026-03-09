@@ -31,12 +31,10 @@
 // ============================================================================
 //  Diagnostic feature toggles & global policy
 // ============================================================================
-#define FEAT_PC_DETECT_ENABLE        1   // 1=auto-power via PC detect aktif default
 #define FEAT_BT_AUTOSWITCH_AUX       1   // 1=atur AUX↔BT (LOW≥3s dst)
 #define FEAT_FAN_BOOT_TEST           1
 #define FEAT_FACTORY_RESET_COMBO     1
 #define FEAT_RTC_TEMP_TELEMETRY      1   // kirim rtc_c di telemetri
-#define FEAT_RTC_SYNC_POLICY         1   // offset>2s + rate-limit 24h
 #define FEAT_SMPS_PROTECT_ENABLE     1
 #define FEAT_SPK_PROTECT_ENABLE      1
 #define FEAT_FILTER_DS18B20_SOFT     0   // filter software opsional
@@ -54,16 +52,12 @@
 #define TELEM_HZ_REALTIME             30
 #define TELEM_SLOW_HZ                 1
 
-#define PC_DETECT_ACTIVE_LOW         1
-#define PC_DETECT_INPUT_PULL         INPUT_PULLUP
 #define BTN_POWER_PIN                13      // tombol power utama (input), aktif LOW
 #define BTN_BOOT_PIN                 0
 #define BTN_POWER_ACTIVE_LOW         1
 #define BT_STATUS_ACTIVE_LOW         0
 
 #define UI_BOOT_HOLD_MS              3000
-#define PC_DETECT_GRACE_MS           2500
-#define PC_DETECT_DEBOUNCE_MS        80
 #define BT_AUTO_OFF_IDLE_MS          300000
 
 #define SMPS_CUT_V                   50.0f
@@ -250,14 +244,13 @@
 
 
 // ============================================================================
-//  PC Detect (opto) → Auto Power
-//  - LOW = PC ON (aktif-low default modul opto)
-//  - ON otomatis saat PC ON; OFF tertunda 5s saat PC OFF
-//  - Diabaikan saat OTA (opsional)
+//  SMPS Hardware Fault Detect (opto)
+//  - Menggantikan fungsi lama PC Detect. Opto membaca indikator LED Limit/Short SMPS.
+//  - LOW = FAULT TERJADI (Opto menyala karena LED error SMPS menyala)
+//  - Akan memicu Force Shutdown instan.
 // ============================================================================
-#define PC_DETECT_PIN            34
-#define PC_OFF_DELAY_MS          5000
-#define PC_AUTO_IGNORE_DURING_OTA 1
+#define SMPS_FAULT_PIN            34
+#define SMPS_FAULT_ACTIVE_LOW     1
 
 
 // ============================================================================

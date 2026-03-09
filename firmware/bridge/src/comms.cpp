@@ -1,14 +1,44 @@
 #include "comms.h"
 #include "config.h"
 #include "display.h"
+#include "USB.h"
 
 String hostRxBuffer;
 String ampRxBuffer;
 String lastAmpTelemetry;
 
+static void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+  if (event_base == ARDUINO_USB_EVENTS) {
+    switch (event_id) {
+      case ARDUINO_USB_SUSPEND_EVENT:
+        displaySetBacklight(false);
+        // PC terdeteksi Sleep, matikan amplifier
+        {
+          JsonDocument doc;
+          doc["type"] = "cmd";
+          doc["cmd"]["power"] = false;
+          commsSendAmpCommand(doc);
+        }
+        break;
+      case ARDUINO_USB_RESUME_EVENT:
+        displaySetBacklight(true);
+        // PC bangun, nyalakan amplifier
+        {
+          JsonDocument doc;
+          doc["type"] = "cmd";
+          doc["cmd"]["power"] = true;
+          commsSendAmpCommand(doc);
+        }
+        break;
+    }
+  }
+}
+
 void commsInit() {
   Serial.begin(HOST_SERIAL_BAUD); // USB CDC Native
   Serial1.begin(AMP_SERIAL_BAUD, SERIAL_8N1, PIN_UART_AMP_RX, PIN_UART_AMP_TX);
+
+  USB.onEvent(usbEventCallback);
 
   hostRxBuffer.reserve(BRIDGE_MAX_FRAME);
   ampRxBuffer.reserve(BRIDGE_MAX_FRAME);

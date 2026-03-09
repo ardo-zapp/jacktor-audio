@@ -132,12 +132,10 @@ static void writeNvsSnapshot(JsonObject root) {
 
 static void writeFeatures(JsonObject root) {
   JsonObject feats = root["features"].to<JsonObject>();
-  feats["pc_detect"] = static_cast<bool>(FEAT_PC_DETECT_ENABLE);
   feats["bt_autoswitch"] = static_cast<bool>(FEAT_BT_AUTOSWITCH_AUX);
   feats["fan_boot_test"] = static_cast<bool>(FEAT_FAN_BOOT_TEST);
   feats["factory_reset_combo"] = static_cast<bool>(FEAT_FACTORY_RESET_COMBO);
   feats["rtc_temp"] = static_cast<bool>(FEAT_RTC_TEMP_TELEMETRY);
-  feats["rtc_sync_policy"] = static_cast<bool>(FEAT_RTC_SYNC_POLICY);
   feats["smps_protect"] = static_cast<bool>(FEAT_SMPS_PROTECT_ENABLE);
   feats["ds18b20_softfilter"] = static_cast<bool>(FEAT_FILTER_DS18B20_SOFT);
   feats["safe_mode"] = static_cast<bool>(SAFE_MODE_SOFT);
@@ -152,6 +150,7 @@ static void writeErrors(JsonArray arr) {
   if (isnan(getHeatsinkC())) arr.add("SENSOR_FAIL");
   if (powerSpkProtectFault()) arr.add("SPEAKER_PROTECT_FAIL");
   if (powerOtpFault()) arr.add("OVER_TEMP_FAULT");
+  if (powerSmpsHwFaultLatched()) arr.add("SMPS_HW_FAULT");
 }
 
 static void writeAnalyzer(JsonObject data) {
@@ -294,14 +293,6 @@ static void sendSlowTelemetry(uint32_t now) {
   JsonArray errs = data["errors"].to<JsonArray>();
   writeErrors(errs);
 
-  JsonObject pc = data["pc_detect"].to<JsonObject>();
-  pc["enabled"] = static_cast<bool>(FEAT_PC_DETECT_ENABLE);
-  pc["armed"] = powerPcDetectArmed();
-  pc["level"] = powerPcDetectLevelActive() ? "LOW" : "HIGH";
-  uint32_t lastChange = powerPcDetectLastChangeMs();
-  if (lastChange == 0) pc["last_change_ms"] = nullptr;
-  else pc["last_change_ms"] = now - lastChange;
-
   writeAnalyzer(data);
   writeBuzzer(data);
   writeNvsSnapshot(data);
@@ -323,6 +314,8 @@ static void sendAckOk(const char *key, const TValue &value, bool tone = true) {
   root["changed"] = key;
   root["value"] = value;
   sendTelemetry(root);
+  // Bunyikan buzzer setiap perintah ter-handle sukses
+  // (bukan di level parsing raw string agar tak ikut bunyi saat menerima data OTA)
   if (tone) playAckTone();
 }
 
@@ -483,8 +476,6 @@ static void handleRtcSync(uint32_t targetEpoch) {
 
   int32_t offset = (int32_t)((int64_t)targetEpoch - (int64_t)currentEpoch);
 
-  // BYPASS: Karena Panel Bridge baru sekarang memakai NTP Wi-Fi (Sangat akurat),
-  // kita abaikan semua policy lama (rate limit) agar jam di amp selalu terupdate secara paksa.
   if (!sensorsSetUnixTime(targetEpoch)) {
     sendLogErrorReason("rtc_sync_failed", "rtc_set_fail");
     return;
@@ -771,8 +762,7 @@ static void handleJsonLine(const String &line) {
   JsonObject cmd = root["cmd"];
   if (cmd.isNull()) return;
 
-  // Bunyikan buzzer setiap kali ada perintah tervalidasi dari panel
-  buzzerClick();
+  // Bunyikan buzzer dipindahkan ke fungsi sendAckOk untuk menghindari spam saat OTA/Telemetry
 
   HANDLE_IF_PRESENT("power", handleCmdPower);
   HANDLE_IF_PRESENT("sleep_timer", handleCmdSleepTimer);

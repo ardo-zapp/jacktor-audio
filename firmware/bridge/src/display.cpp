@@ -47,6 +47,7 @@ static lv_obj_t * ta_ssid;
 static lv_obj_t * ta_pass;
 static lv_obj_t * kb;
 static lv_obj_t * label_ip;
+static lv_obj_t * label_error;
 
 // State Tracking for toggles
 static bool state_power_on = false;
@@ -299,6 +300,12 @@ static void build_ui() {
   lv_label_set_text(label_mode, "AUX");
   lv_obj_set_style_text_color(label_mode, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
   lv_obj_align(label_mode, LV_ALIGN_TOP_RIGHT, -5, 5);
+
+  // Label Peringatan Error (Disembunyikan default)
+  label_error = lv_label_create(screen);
+  lv_label_set_text(label_error, "");
+  lv_obj_set_style_text_color(label_error, lv_color_hex(0xFF0000), LV_PART_MAIN); // Merah terang
+  lv_obj_align(label_error, LV_ALIGN_TOP_RIGHT, -5, 25);
 
   // Tabview Header (Bottom or Top) di LVGL 9
   lv_obj_t * tabview = lv_tabview_create(lv_screen_active());
@@ -608,6 +615,24 @@ void displayUpdateTelemetry(const JsonDocument& doc) {
         snprintf(slpBuf, sizeof(slpBuf), LV_SYMBOL_BELL " %dm", sleep_remaining);
         lv_label_set_text(label_sleep, slpBuf);
         lv_obj_set_style_text_color(label_sleep, lv_color_hex(0xFF8800), LV_PART_MAIN); // Orange jika aktif
+    }
+
+    // Parsing Errors
+    if (hz1["errors"].is<JsonArray>()) {
+        JsonArrayConst errs = hz1["errors"];
+        if (errs.size() > 0) {
+            String err_str = LV_SYMBOL_WARNING " ";
+            for (size_t i=0; i<errs.size(); i++) {
+                err_str += errs[i].as<String>();
+                if (i < errs.size() - 1) err_str += ", ";
+            }
+            lv_label_set_text(label_error, err_str.c_str());
+            lv_obj_remove_flag(label_error, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(label_error, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else {
+        lv_obj_add_flag(label_error, LV_OBJ_FLAG_HIDDEN);
     }
   }
 }

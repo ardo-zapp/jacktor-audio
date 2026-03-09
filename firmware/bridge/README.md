@@ -11,6 +11,9 @@ Menggunakan teknik **Full-Screen Double Buffering** di memori PSRAM (`MALLOC_CAP
 
 ## Pemetaan Pin / Wiring (ESP32-S3)
 
+> **⚠️ PERINGATAN KERAS WIRING USB (VCC):**
+> Anda **TIDAK BOLEH** menghubungkan kabel merah VCC (5V) dari port USB PC ke port USB ESP32-S3 jika ESP32-S3 juga ditenagai dari dalam amplifier (adaptor). Memparalel dua tegangan 5V dari sumber berbeda dapat menyebabkan *backfeeding* yang berpotensi **membakar port USB Motherboard PC Anda!** Cukup sambungkan 3 kabel saja dari PC: **D+, D-, dan Ground**.
+
 *Catatan: Semua SPI bus dipisah untuk mencegah *bottleneck* performa dari DMA layar dengan Polling sentuhan.*
 
 | Komponen | Pin (ESP32-S3) | Fungsi & Keterangan |

@@ -4,6 +4,7 @@ Firmware ini bertugas sebagai *Core Engine* atau ECU dari ekosistem Jacktor Audi
 
 ## Sistem Keamanan Lanjutan (Safety Features)
 - **Over-Temperature Protection (OTP)**: Jika sensor `DS18B20` mendeteksi suhu *heatsink* menembus 85°C (setelah disaring *low-pass filter*), amplifier akan melakukan *Force Shutdown* mendadak mematikan relay dan membunyikan alarm.
+- **SMPS Hardware Fault**: Membaca logic dari optocoupler (menggunakan pin `SMPS_FAULT_PIN` yang sebelumnya `PC_DETECT_PIN`). Jika opto menyala akibat LED limit arus atau konslet SMPS, Amplifier secara **instan melakukan shutdown paksa** untuk melindungi motherboard.
 - **Anti-Stall Fan Control**: *Minimum duty cycle* kipas PWM dipatok pada `450` (rentang 0-1023). Hal ini menjamin bilah kipas terus bergulir pelan mendisipasikan sisa inersia panas pada suhu di bawah 40°C. Waktu tes lonjakan *kickstart* saat boot dinaikkan menjadi 5 detik.
 - **Asynchronous Sensor Polling**: DallasTemperature kini dijalankan menggunakan format `setWaitForConversion(false)`. Penghapusan sifat pemblokiran ini melancarkan ritme loop agar data telemetri 30Hz ke Panel tidak pernah macet.
 - **Sleep Timer**: Panel Bridge dapat mengirimkan menit parameter (15..120). ESP32 Amplifier akan mencatat *target epoch* ke depan berbasis RTC, dan akan secara otomatis membunuh daya listrik relay jika batas waktu terlewati.
