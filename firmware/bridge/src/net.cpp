@@ -92,8 +92,15 @@ void netSyncRTC() {
   if (!netIsConnected()) return;
 
   struct tm timeinfo;
+  // Coba dapatkan waktu dengan timeout 5 detik
   if (!getLocalTime(&timeinfo, 5000)) {
+    displayBootLog("[ WARN ] NTP Sync failed. Retrying later.");
     return;
+  }
+
+  // Periksa apakah tahunnya masuk akal (>2023). Jika tahun 1970, berarti gagal sync epoch
+  if (timeinfo.tm_year < 123) {
+      return;
   }
 
   // Format waktu lokal ISO 8601 YYYY-MM-DDTHH:MM:SS

@@ -7,28 +7,27 @@ String hostRxBuffer;
 String ampRxBuffer;
 String lastAmpTelemetry;
 
+// Anti-spam debounce timers for USB events
+static uint32_t last_usb_suspend_ms = 0;
+static uint32_t last_usb_resume_ms = 0;
+static bool pending_suspend = false;
+static bool pending_resume = false;
+
 static void usbEventCallback(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
   if (event_base == ARDUINO_USB_EVENTS) {
+    uint32_t now = millis();
     switch (event_id) {
       case ARDUINO_USB_SUSPEND_EVENT:
-        displaySetBacklight(false);
-        // PC terdeteksi Sleep, matikan amplifier
-        {
-          JsonDocument doc;
-          doc["type"] = "cmd";
-          doc["cmd"]["power"] = false;
-          commsSendAmpCommand(doc);
-        }
+        // Setel antrean event suspend, batalkan resume jika ada
+        pending_suspend = true;
+        pending_resume = false;
+        last_usb_suspend_ms = now;
         break;
       case ARDUINO_USB_RESUME_EVENT:
-        displaySetBacklight(true);
-        // PC bangun, nyalakan amplifier
-        {
-          JsonDocument doc;
-          doc["type"] = "cmd";
-          doc["cmd"]["power"] = true;
-          commsSendAmpCommand(doc);
-        }
+        // Setel antrean event resume, batalkan suspend jika ada
+        pending_resume = true;
+        pending_suspend = false;
+        last_usb_resume_ms = now;
         break;
     }
   }
@@ -82,6 +81,27 @@ static void handleHostFrame(const String &line) {
 }
 
 void commsTick(uint32_t now) {
+  // --- Handle USB Events with Debounce ---
+  // Jika suspend bertahan > 2 detik tanpa diselingi resume (stabil)
+  if (pending_suspend && (now - last_usb_suspend_ms > 2000)) {
+      pending_suspend = false;
+      displaySetBacklight(false);
+      JsonDocument doc;
+      doc["type"] = "cmd";
+      doc["cmd"]["power"] = false;
+      commsSendAmpCommand(doc);
+  }
+
+  // Jika resume bertahan > 1 detik tanpa diselingi suspend (stabil)
+  if (pending_resume && (now - last_usb_resume_ms > 1000)) {
+      pending_resume = false;
+      displaySetBacklight(true);
+      JsonDocument doc;
+      doc["type"] = "cmd";
+      doc["cmd"]["power"] = true;
+      commsSendAmpCommand(doc);
+  }
+
   // Service AMP UART
   while (Serial1.available()) {
     char c = static_cast<char>(Serial1.read());
