@@ -1,0 +1,14 @@
+.pio/
+build/
+managed_components/
+dependencies.lock
+sdkconfig.*
+!sdkconfig.defaults
+cmake-build*/
+.ccls-cache/
+compile_commands.json
+*.log
+__pycache__/
+*.pyc
+*.last_smps_volt
+tools/log*.txt

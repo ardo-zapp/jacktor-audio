@@ -1,0 +1,5 @@
+dependencies:
+  espressif/cjson: "^1.7.15"
+  lvgl/lvgl: "^8.3.11"
+  espressif/esp_lcd_ili9341: "^2.1.0"
+  atanisoft/esp_lcd_touch_xpt2046: "^1.0.5"
