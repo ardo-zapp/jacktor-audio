@@ -1,0 +1,89 @@
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
+
+Copyright (c) 2026 Ardo Zapp
+
+================================================================================
+1. GRANT OF RIGHTS & PERMISSIONS
+================================================================================
+
+Under the terms of this License, the Licensor grants you a worldwide, royalty-free, 
+non-sublicensable, non-exclusive license to exercise the Licensed Rights in the 
+Material to:
+a. Reproduce and Share the Material, in whole or in part, for NonCommercial 
+   purposes only.
+b. Produce, adapt, remix, and share Adapted Material for NonCommercial purposes 
+   only.
+
+================================================================================
+2. LICENSE CONDITIONS
+================================================================================
+
+Your exercise of the Licensed Rights is expressly made subject to the following 
+conditions:
+
+a. Attribution:
+   If you share the Material or any adapted version of it, you must retain the 
+   copyright notice, provide appropriate credit to Ardo Zapp, include a link to 
+   this license, and indicate if modifications were made.
+
+b. NonCommercial Use Only:
+   You may NOT use the Material or any derivative works for commercial purposes. 
+   Prohibited commercial activities include, but are not limited to:
+   - Selling, leasing, or monetizing the source code or pre-compiled binaries.
+   - Selling pre-assembled physical audio amplifier hardware running this firmware.
+   - Packaging this software or hardware design into commercial audio kits or services.
+   - Commercial hardware manufacturing based on the provided schematics and code.
+
+c. ShareAlike:
+   If you remix, transform, or build upon the Material for non-commercial purposes, 
+   you must distribute your contributions under the exact same license 
+   (CC BY-NC-SA 4.0).
+
+d. No Additional Restrictions:
+   You may not apply legal terms or effective technological measures that legally 
+   restrict others from doing anything this license permits.
+
+================================================================================
+3. THIRD-PARTY COMPONENTS & SPECIAL LICENSES NOTICE
+================================================================================
+
+The Jacktor Audio repository bundles and links against third-party open-source 
+components and subsystem-specific drivers. These components are NOT covered by 
+CC BY-NC-SA 4.0 and remain subject to their respective original copyright 
+holders and open-source licenses:
+
+- KernelPatch Module Driver (panel/realme-bengal/kpm/usb-serial):
+  Subject to the GNU General Public License v2.0 or later (GPL-2.0-or-later).
+- KissFFT Real-to-Complex Transform Engine (include/driver/kissfft):
+  Copyright (c) Mark Borgerding. Subject to the 3-Clause BSD License.
+- cJSON Library (firmware/amplifier/managed_components):
+  Copyright (c) Dave Gamble and cJSON contributors. Subject to the MIT License.
+- esp-idf-lib Drivers (DS3231, ADS1115):
+  Copyright (c) Ruslan V. Uss and contributors. Subject to the MIT / BSD-3-Clause License.
+- Espressif Drivers (onewire_bus, ds18b20):
+  Copyright (c) Espressif Systems. Subject to the Apache License 2.0.
+- Android Audio Policy Configuration (panel/realme-bengal/modul/jacktor-audio-framework):
+  Subject to the Apache License 2.0.
+- Font Awesome Free Web Assets (panel/realme-bengal/modul/jacktor-audio-framework/webroot):
+  Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License.
+
+The CC BY-NC-SA 4.0 license applies strictly to the original code, firmware logic, 
+DSP signal calibration algorithms, hardware telemetry state machines, scripts, 
+schematics, module frameworks, and documentation authored by Ardo Zapp.
+
+================================================================================
+4. DISCLAIMER OF WARRANTIES & LIMITATION OF LIABILITY
+================================================================================
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
+PARTICULAR PURPOSE, AND NONINFRINGEMENT. 
+
+IN NO EVENT SHALL THE AUTHOR (ARDO ZAPP) BE LIABLE FOR ANY CLAIM, DAMAGES, 
+HARDWARE DESTRUCTION, ELECTRICAL SHORTS, FIRE HAZARDS, SPEAKER DAMAGE, OR OTHER 
+LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE USE OR HANDLING OF 
+THIS SOFTWARE AND HARDWARE DESIGN. YOU ARE FULLY RESPONSIBLE FOR HIGH-VOLTAGE 
+SMPS AND AUDIO POWER ELECTRONICS SAFETY AT YOUR OWN RISK.
+
+================================================================================
+Official License Legal Text: https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode

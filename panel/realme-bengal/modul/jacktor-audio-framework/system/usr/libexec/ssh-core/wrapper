@@ -1,0 +1,12 @@
+#!/system/bin/sh
+bindir="/system/usr/libexec/ssh-core"
+execname="$(basename "$0")"
+
+AUTHLIB="/data/adb/modules/jacktor-audio-framework/system/usr/lib/libsshauth.so"
+[ ! -f "$AUTHLIB" ] && AUTHLIB="/system/usr/lib/libsshauth.so"
+
+if [ "$execname" = "sshd" ] || [ "$execname" = "sshd-session" ]; then
+    exec env -u LD_PRELOAD LD_PRELOAD="$AUTHLIB" LD_LIBRARY_PATH=/system/usr/lib:$LD_LIBRARY_PATH "$bindir/$execname" "$@"
+else
+    exec env -u LD_PRELOAD LD_LIBRARY_PATH=/system/usr/lib:$LD_LIBRARY_PATH "$bindir/$execname" "$@"
+fi

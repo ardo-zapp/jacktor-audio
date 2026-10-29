@@ -1,0 +1,6 @@
+id=jacktor-audio-framework
+name=Jacktor Audio Framework & DSP Panel
+version=v2.6.0-HiFi
+versionCode=2600
+author=Ardo Zapp & zyhk
+description=Unified Hi-Fi Audio Framework: Full Bit-Perfect bypass (384kHz 32-bit Speaker + 768kHz USB DAC), Audio Samplerate Changer, Audio Jitter Silencer, 3GB SWAP Virtual Memory Engine, Hardware Audio Gain Control, 256 DPI Display Profile, 24/7 Battery Bypass, and Modern WebUI Panel.

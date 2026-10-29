@@ -1,0 +1,22 @@
+#!/system/bin/sh
+# Jacktor Audio Framework - Amplifier & Audio Diagnostics
+echo "=================================================="
+echo "  JACKTOR AUDIO & AMPLIFIER DSP STATUS            "
+echo "=================================================="
+echo "[1] ALSA Sound Cards:"
+cat /proc/asound/cards 2>/dev/null
+echo ""
+echo "[2] Active Audio Streams (PCM):"
+cat /proc/asound/pcm 2>/dev/null
+echo ""
+echo "[3] USB Audio / OTG Devices:"
+lsusb 2>/dev/null
+echo ""
+echo "[4] Power & VBUS Boost:"
+echo "  OTG Online: $(cat /sys/class/power_supply/usb/otg_online 2>/dev/null)"
+echo "  VBUS Volts: $(cat /sys/class/power_supply/usb/voltage_now 2>/dev/null) uV"
+echo "  Battery   : $(cat /sys/class/power_supply/battery/capacity 2>/dev/null)% ($(cat /sys/class/power_supply/battery/status 2>/dev/null))"
+echo ""
+echo "[5] Audio Server Process:"
+ps -ef 2>/dev/null | grep -E "(audioserver|audio.service)" | grep -v grep
+echo "=================================================="

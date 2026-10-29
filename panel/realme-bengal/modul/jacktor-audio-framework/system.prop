@@ -1,0 +1,120 @@
+# ==============================================================================
+# GSI Device Identification & Optimization Properties
+# Source: Analisis Deviceinfo & Stock Realme C15 (RMX2195 / Bengal)
+# Kompatibel dan Aman untuk ROM GSI (Android 14 / TrebleDroid / LineageOS)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Identitas Perangkat & Spoofing (Realme C15 RMX2195)
+# ------------------------------------------------------------------------------
+ro.product.brand=realme
+ro.product.manufacturer=realme
+ro.product.model=RMX2195
+ro.product.name=RMX2195
+ro.product.device=RECE4244
+ro.build.product=RMX2195
+
+# Partisi System
+ro.product.system.brand=realme
+ro.product.system.manufacturer=realme
+ro.product.system.model=RMX2195
+ro.product.system.name=RMX2195
+ro.product.system.device=RECE4244
+
+# Partisi System_ext
+ro.product.system_ext.brand=realme
+ro.product.system_ext.manufacturer=realme
+ro.product.system_ext.model=RMX2195
+ro.product.system_ext.name=RMX2195
+ro.product.system_ext.device=RECE4244
+
+# Partisi Product
+ro.product.product.brand=realme
+ro.product.product.manufacturer=realme
+ro.product.product.model=RMX2195
+ro.product.product.name=RMX2195
+ro.product.product.device=RECE4244
+
+# ------------------------------------------------------------------------------
+# 2. Signature / Fingerprint (Menyamakan dengan partisi ODM / Stock C15)
+#    Penting agar Play Integrity / CTS tidak mismatch antar-partisi
+# ------------------------------------------------------------------------------
+ro.build.fingerprint=realme/RMX2195T2/RECE4244:11/RKQ1.201217.002/1624241518687:user/release-keys
+ro.system.build.fingerprint=realme/RMX2195T2/RECE4244:11/RKQ1.201217.002/1624241518687:user/release-keys
+ro.product.build.fingerprint=realme/RMX2195T2/RECE4244:11/RKQ1.201217.002/1624241518687:user/release-keys
+ro.system_ext.build.fingerprint=realme/RMX2195T2/RECE4244:11/RKQ1.201217.002/1624241518687:user/release-keys
+
+# Display ID & Build Status
+ro.build.display.id=RMX2195_11_C.06
+ro.build.display.full_id=RMX2195export_11_C.06_2021072913040000
+ro.build.type=user
+ro.build.tags=release-keys
+
+# ------------------------------------------------------------------------------
+# 3. Optimasi Kamera (Akses Multi-lensa / AUX Camera)
+# ------------------------------------------------------------------------------
+vendor.camera.aux.packagelist=android,com.oppo.engineermode.camera,com.oppo.camera,com.oppo.engineermode
+persist.vendor.camera.privapp.list=com.oppo.camera,com.oppo.engineermode.camera,com.oppo.engineermode
+persist.camera.privapp.list=com.oppo.camera,com.oppo.engineermode.camera,com.oppo.engineermode
+
+# ------------------------------------------------------------------------------
+# 4. Codec Multimedia Snapdragon QTI & Audio Tuning
+# ------------------------------------------------------------------------------
+vendor.mm.enable.qcom_parser=46003442
+persist.mm.enable.prefetch=true
+media.stagefright.thumbnail.prefer_hw_codecs=true
+debug.stagefright.ccodec=1
+media.aac_51_output_enabled=true
+ro.media.recorder-max-base-layer-fps=60
+
+audio.deep_buffer.media=true
+audio.offload.video=true
+ro.af.client_heap_size_kbyte=7168
+
+# ------------------------------------------------------------------------------
+# 5. HWUI, Rendering & Graphic Acceleration
+# ------------------------------------------------------------------------------
+ro.hwui.texture_cache_size=72
+ro.hwui.layer_cache_size=48
+ro.hwui.r_buffer_cache_size=8
+ro.hwui.path_cache_size=32
+ro.hwui.gradient_cache_size=1
+ro.hwui.drop_shadow_cache_size=6
+ro.hwui.texture_cache_flushrate=0.4
+ro.hwui.text_small_cache_width=1024
+ro.hwui.text_small_cache_height=1024
+ro.hwui.text_large_cache_width=2048
+ro.hwui.text_large_cache_height=1024
+debug.sf.enable_hwc_vds=1
+debug.sf.latch_unsignaled=1
+
+# ------------------------------------------------------------------------------
+# 6. Bluetooth, Telephony & Misc Hardware
+# ------------------------------------------------------------------------------
+persist.vendor.btstack.aac_frm_ctl.enabled=true
+ro.bluetooth.library_name=libbluetooth_qti.so
+telephony.lteOnCdmaDevice=1
+ro.vendor.qti.va_aosp.support=1
+drm.service.enabled=true
+persist.fuse_sdcard=true
+ro.charger.enable_suspend=1
+
+# ------------------------------------------------------------------------------
+# 7. Jacktor Hi-Fi Audio Buffer & Jitter-Free Engine
+# ------------------------------------------------------------------------------
+# Standard High-Fidelity DynResampler without extreme 520-tap CPU starvation
+ro.audio.flinger_standbytime_ms=3000
+
+# Safe USB OTG Host Mode (Managed safely by service.sh after boot completed)
+# Avoid early-boot phh-prop-handler race condition that causes PMIC SMPL bootloop
+# NOTE: Force persist.sys.phh.oppo.usbotg=0 at early boot to prevent power brownout!
+# OTG Host Mode is dynamically activated by service.sh strictly after sys.boot_completed=1.
+persist.sys.phh.oppo.usbotg=0
+persist.sys.usb.config=adb
+
+# ------------------------------------------------------------------------------
+# 8. Anti-Low Battery Shutdown & Infinite AC Bypass Mode
+# ------------------------------------------------------------------------------
+ro.config.low_battery_shutdown=0
+ro.config.hw_power_saving=false
+ro.config.hw_power_saving_on=false

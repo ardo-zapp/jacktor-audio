@@ -1,0 +1,223 @@
+#!/system/bin/sh
+# Jacktor Audio Framework - OpenSSH Service Controller
+# Ported from PatchedMagiskSSH (powerAn2020)
+
+umask 022
+unset LD_PRELOAD
+
+SSHDIR="/data/adb/ssh"
+PIDFILE="${SSHDIR}/sshd.pid"
+CONFIG="${SSHDIR}/sshd_config"
+LOGFILE="${SSHDIR}/sshd.log"
+BINDIR="/system/usr/libexec/ssh-core"
+LIBDIR="/system/usr/lib"
+
+ensure_env() {
+    # Ensure overlayfs on /system/usr
+    if [ ! -f "${BINDIR}/sshd" ]; then
+        mount -t overlay overlay -o lowerdir="/data/adb/modules/jacktor-audio-framework/system/usr:/system/usr" /system/usr 2>/dev/null
+    fi
+
+    mkdir -p "${SSHDIR}/root/.ssh" "${SSHDIR}/shell/.ssh" 2>/dev/null
+    chmod 711 /data/adb 2>/dev/null
+    chmod 755 "${SSHDIR}" 2>/dev/null
+    chmod 700 "${SSHDIR}/root" "${SSHDIR}/root/.ssh" 2>/dev/null
+    touch "${SSHDIR}/root/.ssh/authorized_keys" 2>/dev/null
+    chmod 600 "${SSHDIR}/root/.ssh/authorized_keys" 2>/dev/null
+
+    # Shell user setup & permissions
+    chown -R shell:shell "${SSHDIR}/shell" 2>/dev/null
+    chmod 750 "${SSHDIR}/shell" 2>/dev/null
+    chmod 700 "${SSHDIR}/shell/.ssh" 2>/dev/null
+    touch "${SSHDIR}/shell/.ssh/authorized_keys" 2>/dev/null
+    chmod 600 "${SSHDIR}/shell/.ssh/authorized_keys" 2>/dev/null
+    chown shell:shell "${SSHDIR}/shell/.ssh/authorized_keys" 2>/dev/null
+
+    [ ! -f "${SSHDIR}/lastlog" ] && touch "${SSHDIR}/lastlog" && chmod 644 "${SSHDIR}/lastlog" 2>/dev/null
+    
+    # Ensure auth.conf exists in module config/ and sync to /data/adb/ssh/auth.conf for libsshauth.so
+    MOD_CONF_DIR="/data/adb/modules/jacktor-audio-framework/config"
+    mkdir -p "$MOD_CONF_DIR" 2>/dev/null
+    if [ ! -f "${MOD_CONF_DIR}/auth.conf" ]; then
+        if [ -f "${SSHDIR}/auth.conf" ]; then
+            cp -f "${SSHDIR}/auth.conf" "${MOD_CONF_DIR}/auth.conf" 2>/dev/null
+        else
+            printf "username=root\npassword=admin123\n" > "${MOD_CONF_DIR}/auth.conf"
+        fi
+        chmod 600 "${MOD_CONF_DIR}/auth.conf" 2>/dev/null
+    fi
+    cp -f "${MOD_CONF_DIR}/auth.conf" "${SSHDIR}/auth.conf" 2>/dev/null
+    chmod 600 "${SSHDIR}/auth.conf" 2>/dev/null
+
+    # Ensure Linux shell profile for root and shell
+    chmod 711 /data/adb /data/adb/modules 2>/dev/null
+    if [ -f "/data/adb/modules/jacktor-audio-framework/system/bin/jacktor-motd" ]; then
+        chmod 755 "/data/adb/modules/jacktor-audio-framework/system/bin/jacktor-motd" 2>/dev/null
+        cp "/data/adb/modules/jacktor-audio-framework/system/bin/jacktor-motd" "${SSHDIR}/jacktor-motd" 2>/dev/null
+        chmod 755 "${SSHDIR}/jacktor-motd" 2>/dev/null
+    fi
+    if [ -f "/data/adb/modules/jacktor-audio-framework/system/bin/clear" ]; then
+        chmod 755 "/data/adb/modules/jacktor-audio-framework/system/bin/clear" 2>/dev/null
+        cp "/data/adb/modules/jacktor-audio-framework/system/bin/clear" "${SSHDIR}/clear" 2>/dev/null
+        chmod 755 "${SSHDIR}/clear" 2>/dev/null
+    fi
+    if [ -f "/data/adb/modules/jacktor-audio-framework/system/usr/profile_root" ]; then
+        cp "/data/adb/modules/jacktor-audio-framework/system/usr/profile_root" "${SSHDIR}/root/.profile"
+        chmod 644 "${SSHDIR}/root/.profile"
+        echo '[ -f "$HOME/.profile" ] && . "$HOME/.profile"' > "${SSHDIR}/root/.mkshrc"
+        chmod 644 "${SSHDIR}/root/.mkshrc"
+    fi
+    if [ -f "/data/adb/modules/jacktor-audio-framework/system/usr/profile_shell" ]; then
+        cp "/data/adb/modules/jacktor-audio-framework/system/usr/profile_shell" "${SSHDIR}/shell/.profile"
+        chmod 644 "${SSHDIR}/shell/.profile"
+        chown shell:shell "${SSHDIR}/shell/.profile" 2>/dev/null
+        echo '[ -f "$HOME/.profile" ] && . "$HOME/.profile"' > "${SSHDIR}/shell/.mkshrc"
+        chmod 644 "${SSHDIR}/shell/.mkshrc"
+        chown shell:shell "${SSHDIR}/shell/.mkshrc" 2>/dev/null
+    fi
+
+    # Ensure default sshd_config exists
+    if [ ! -f "$CONFIG" ]; then
+        if [ -f "/data/adb/modules/jacktor-audio-framework/system/usr/sshd_config.default" ]; then
+            cp "/data/adb/modules/jacktor-audio-framework/system/usr/sshd_config.default" "$CONFIG"
+        else
+            cat << 'EOF' > "$CONFIG"
+Port 22
+ListenAddress 0.0.0.0
+ListenAddress ::
+PermitRootLogin yes
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication yes
+ChallengeResponseAuthentication no
+KbdInteractiveAuthentication no
+X11Forwarding no
+PrintMotd no
+PrintLastLog no
+Subsystem sftp /system/usr/libexec/ssh-core/sftp-server
+AcceptEnv LANG LC_*
+EOF
+        fi
+        chmod 600 "$CONFIG"
+    else
+        # Ensure PermitRootLogin and PasswordAuthentication are enabled
+        sed -i -E 's/^[#[:space:]]*PermitRootLogin[[:space:]]+.*/PermitRootLogin yes/' "$CONFIG"
+        sed -i -E 's/^[#[:space:]]*PasswordAuthentication[[:space:]]+.*/PasswordAuthentication yes/' "$CONFIG"
+        grep -q "^PermitRootLogin" "$CONFIG" || echo "PermitRootLogin yes" >> "$CONFIG"
+        grep -q "^PasswordAuthentication" "$CONFIG" || echo "PasswordAuthentication yes" >> "$CONFIG"
+    fi
+    chmod 600 "$CONFIG"
+
+    # Host keys generation
+    export LD_LIBRARY_PATH="${LIBDIR}:${LD_LIBRARY_PATH}"
+    if [ -x "${BINDIR}/ssh-keygen" ]; then
+        "${BINDIR}/ssh-keygen" -A >/dev/null 2>&1
+    fi
+}
+
+start_service() {
+    ensure_env
+
+    # Check if already running
+    if [ -f "$PIDFILE" ]; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && grep -s -q "sshd" "/proc/$PID/cmdline" 2>/dev/null; then
+            echo "[*] sshd is already running (PID $PID)"
+            return 0
+        else
+            rm -f "$PIDFILE"
+        fi
+    fi
+    if pidof sshd >/dev/null 2>&1; then
+        echo "[*] sshd is already running"
+        return 0
+    fi
+
+    AUTHLIB="/data/adb/modules/jacktor-audio-framework/system/usr/lib/libsshauth.so"
+    [ ! -f "$AUTHLIB" ] && AUTHLIB="/system/usr/lib/libsshauth.so"
+
+    env -u LD_PRELOAD LD_PRELOAD="$AUTHLIB" LD_LIBRARY_PATH="${LIBDIR}:${LD_LIBRARY_PATH}" "${BINDIR}/sshd" -f "$CONFIG" -E "$LOGFILE"
+    RET=$?
+    unset LD_PRELOAD
+    sleep 0.5
+    if pidof sshd >/dev/null 2>&1; then
+        PID="$(pidof sshd | awk '{print $1}')"
+        echo "$PID" > "$PIDFILE" 2>/dev/null
+        echo "[+] OpenSSH server started successfully (PID $PID)"
+        return 0
+    else
+        echo "[-] Failed to start sshd (exit code $RET)"
+        return 1
+    fi
+}
+
+stop_service() {
+    echo "[*] Stopping OpenSSH server..."
+    if [ -f "$PIDFILE" ]; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        [ -n "$PID" ] && kill "$PID" 2>/dev/null
+    fi
+    killall sshd 2>/dev/null
+    sleep 0.5
+    if pidof sshd >/dev/null 2>&1; then
+        killall -9 sshd 2>/dev/null
+    fi
+    rm -f "$PIDFILE"
+    echo "[+] OpenSSH server stopped"
+}
+
+status_service() {
+    PID=""
+    if [ -f "$PIDFILE" ]; then
+        PID="$(cat "$PIDFILE" 2>/dev/null)"
+        if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null || ! grep -s -q "sshd" "/proc/$PID/cmdline" 2>/dev/null; then
+            PID=""
+        fi
+    fi
+    [ -z "$PID" ] && PID="$(pidof sshd 2>/dev/null | awk '{print $1}')"
+
+    PORT="22"
+    [ -f "$CONFIG" ] && PORT="$(grep -iE '^[[:space:]]*Port[[:space:]]+' "$CONFIG" 2>/dev/null | awk '{print $2}' | tail -n 1)"
+    [ -z "$PORT" ] && PORT="22"
+
+    AUTOSTART="1"
+    [ -f "${SSHDIR}/no-autostart" ] && AUTOSTART="0"
+
+    KEY_COUNT_ROOT=0
+    if [ -f "${SSHDIR}/root/.ssh/authorized_keys" ]; then
+        KEY_COUNT_ROOT="$(grep -c -v '^[[:space:]]*$' "${SSHDIR}/root/.ssh/authorized_keys" 2>/dev/null)"
+        [ -z "$KEY_COUNT_ROOT" ] && KEY_COUNT_ROOT=0
+    fi
+    KEY_COUNT_SHELL=0
+    if [ -f "${SSHDIR}/shell/.ssh/authorized_keys" ]; then
+        KEY_COUNT_SHELL="$(grep -c -v '^[[:space:]]*$' "${SSHDIR}/shell/.ssh/authorized_keys" 2>/dev/null)"
+        [ -z "$KEY_COUNT_SHELL" ] && KEY_COUNT_SHELL=0
+    fi
+
+    if [ -n "$PID" ]; then
+        echo "RUNNING:$PID:$PORT:$AUTOSTART:$KEY_COUNT_ROOT:$KEY_COUNT_SHELL"
+    else
+        echo "STOPPED:0:$PORT:$AUTOSTART:$KEY_COUNT_ROOT:$KEY_COUNT_SHELL"
+    fi
+}
+
+case "$1" in
+    start)
+        start_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    restart)
+        stop_service
+        sleep 0.5
+        start_service
+        ;;
+    status)
+        status_service
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac

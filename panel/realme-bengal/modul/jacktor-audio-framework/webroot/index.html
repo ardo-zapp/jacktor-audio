@@ -1,0 +1,3076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Jacktor Audio Framework • Audiophile Control Center</title>
+    
+    <!-- Synchronous Session Gateway: Redirect to /login.html if unauthenticated -->
+    <script>
+        (function() {
+            var urlParams = new URLSearchParams(window.location.search);
+            var urlToken = urlParams.get('token');
+            if (urlToken) {
+                localStorage.setItem('jacktor_token', urlToken);
+                sessionStorage.setItem('jacktor_token', urlToken);
+            }
+            var token = sessionStorage.getItem('jacktor_token') || localStorage.getItem('jacktor_token');
+            if (!token) {
+                window.location.replace('/login.html');
+            }
+        })();
+    </script>
+    
+    <!-- Local FontAwesome 6 Icons -->
+    <link rel="stylesheet" href="/css/all.min.css">
+    
+    <style>
+        :root {
+            --bg-base: #06090e;
+            --bg-surface: #0d121d;
+            --bg-card: rgba(16, 24, 38, 0.75);
+            --bg-card-hover: rgba(22, 34, 54, 0.85);
+            --border-color: rgba(56, 189, 248, 0.15);
+            --border-highlight: rgba(56, 189, 248, 0.4);
+            
+            --accent: #00e5ff;
+            --accent-cyan: #38bdf8;
+            --accent-green: #10b981;
+            --accent-purple: #a855f7;
+            --accent-red: #ef4444;
+            --accent-warn: #f59e0b;
+            --accent-glow: rgba(0, 229, 255, 0.35);
+
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --text-dim: #64748b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(0, 229, 255, 0.08) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.06) 0px, transparent 50%),
+                linear-gradient(to bottom, #06090e, #0b111a);
+            background-attachment: fixed;
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 16px;
+            font-size: 13px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 20px;
+            background: var(--bg-card);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            margin-bottom: 18px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(0, 229, 255, 0.25), rgba(16, 185, 129, 0.25));
+            border: 1px solid rgba(0, 229, 255, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            color: #fbbf24; /* Electric lightning gold */
+            box-shadow: 0 0 15px rgba(251, 191, 36, 0.35);
+        }
+
+        .brand h1 {
+            font-size: 1.15rem;
+            font-weight: 800;
+            letter-spacing: 0.8px;
+            background: linear-gradient(135deg, #ffffff 30%, #38bdf8 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand p {
+            font-size: 0.72rem;
+            color: var(--text-dim);
+            font-weight: 500;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-muted);
+            letter-spacing: 0.3px;
+        }
+
+        .badge.active {
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-cyan);
+            border-color: rgba(56, 189, 248, 0.4);
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+        }
+
+        .badge.active-green {
+            background: rgba(34, 197, 94, 0.16) !important;
+            color: #4ade80 !important;
+            border-color: rgba(34, 197, 94, 0.5) !important;
+            box-shadow: 0 0 12px rgba(34, 197, 94, 0.3) !important;
+        }
+
+        .badge.active-green i {
+            color: #4ade80 !important;
+        }
+
+        .badge.pulse {
+            animation: pulse-glow 2s infinite;
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 1; filter: drop-shadow(0 0 2px var(--accent)); }
+            50% { opacity: 0.65; filter: none; }
+        }
+
+        /* GRID LAYOUT */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+            outline: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .card:hover, .card:active, .card:focus, .card:focus-within {
+            border-color: var(--border-color);
+            transform: none;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+            outline: none;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            margin-bottom: 12px;
+        }
+
+        .card-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.4px;
+        }
+
+        .card-title i {
+            color: var(--accent-cyan);
+            font-size: 0.95rem;
+        }
+
+        /* STAT ROWS */
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 0.8rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }
+
+        .stat-row:last-of-type {
+            border-bottom: none;
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .stat-val {
+            font-weight: 600;
+            color: #fff;
+            text-align: right;
+            letter-spacing: 0.2px;
+        }
+
+        .val-cyan { color: var(--accent-cyan) !important; }
+        .val-green { color: var(--accent-green) !important; }
+        .val-purple { color: var(--accent-purple) !important; }
+        .val-red { color: var(--accent-red) !important; }
+        .val-warn { color: var(--accent-warn) !important; }
+
+        /* BUTTONS */
+        .btn {
+            background: rgba(255, 255, 255, 0.07);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #fff;
+            padding: 7px 14px;
+            border-radius: 10px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.14);
+            border-color: rgba(255, 255, 255, 0.25);
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            margin-top: 14px;
+            flex-wrap: wrap;
+        }
+
+        .btn-mode, .btn-tweak {
+            flex: 1 1 auto;
+            text-align: center;
+            justify-content: center;
+            transition: all 0.25s ease;
+            font-size: 0.78rem;
+            padding: 7px 10px;
+        }
+
+        .btn-mode.active, .btn-tweak.active {
+            background: linear-gradient(135deg, #0284c7 0%, #1d4ed8 100%) !important;
+            border-color: #38bdf8 !important;
+            color: #ffffff !important;
+            box-shadow: 0 0 16px rgba(14, 165, 233, 0.5) !important;
+            font-weight: 700;
+        }
+
+        .btn-mode.active i, .btn-tweak.active i {
+            color: #ffffff !important;
+        }
+
+        .btn-lang {
+            padding: 6px 12px;
+            border-color: rgba(14, 165, 233, 0.4);
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: rgba(14, 165, 233, 0.12);
+            color: #38bdf8;
+        }
+
+        .btn-lang:hover {
+            background: rgba(14, 165, 233, 0.25);
+            border-color: #38bdf8;
+            box-shadow: 0 0 10px rgba(14, 165, 233, 0.3);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, rgba(0, 229, 255, 0.2), rgba(59, 130, 246, 0.2));
+            border-color: var(--accent);
+            color: #fff;
+        }
+
+        .btn-logout {
+            background: rgba(239, 68, 68, 0.18);
+            border: 1px solid rgba(239, 68, 68, 0.45);
+            color: #fca5a5;
+            font-weight: 600;
+        }
+
+        .btn-logout:hover {
+            background: #ef4444;
+            border-color: #ef4444;
+            color: #ffffff;
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.45);
+            transform: translateY(-1px);
+        }
+
+        /* TRACK HERO & MARQUEE */
+        .track-hero {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .track-art {
+            width: 52px;
+            height: 52px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(0, 229, 255, 0.2));
+            border: 1px solid rgba(168, 85, 247, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: #38bdf8;
+            flex-shrink: 0;
+            box-shadow: 0 0 14px rgba(56, 189, 248, 0.3);
+            overflow: hidden;
+            position: relative;
+            transition: box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+        }
+
+        .track-art.has-cover {
+            box-shadow: none !important;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .track-cover-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 9px;
+            display: block;
+        }
+
+        .track-info {
+            flex: 1;
+            overflow: hidden;
+            min-width: 0;
+        }
+
+        .marquee-box {
+            overflow: hidden;
+            white-space: nowrap;
+            position: relative;
+            width: 100%;
+        }
+
+        .track-title {
+            display: inline-block;
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .track-artist {
+            display: inline-block;
+            font-size: 0.78rem;
+            color: var(--accent-cyan);
+            margin-top: 2px;
+        }
+
+        /* PIPELINE FLOW */
+        .pipeline-flow {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 8px 12px;
+            margin-bottom: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            font-size: 0.72rem;
+        }
+
+        .pipe-node {
+            text-align: center;
+        }
+
+        .pipe-label {
+            font-size: 0.65rem;
+            color: var(--text-dim);
+            letter-spacing: 0.5px;
+            margin-bottom: 2px;
+        }
+
+        .pipe-val {
+            font-weight: 700;
+            color: #fff;
+        }
+
+        .pipe-arrow {
+            color: var(--text-dim);
+            font-size: 0.7rem;
+        }
+
+        /* SLIDER CONTAINER */
+        .slider-container {
+            margin: 12px 0 6px 0;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        input[type=range] {
+            width: 100%;
+            height: 6px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.12);
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            box-shadow: 0 0 10px var(--accent);
+        }
+
+        /* USB DEVICE CARDS */
+        .usb-device-card {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 9px 12px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.78rem;
+        }
+
+        .usb-device-icon {
+            font-size: 1.1rem;
+            color: var(--accent-cyan);
+            width: 24px;
+            text-align: center;
+        }
+
+        /* MANUAL TWEAKS CARD */
+        .setting-item {
+            background: rgba(0, 0, 0, 0.22);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 10px 12px;
+        }
+
+        /* TERMINAL */
+        .cmd-input-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .cmd-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 10px;
+            outline: none;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+
+        .cmd-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 10px var(--accent-glow);
+        }
+
+        .terminal {
+            background: #020408;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 12px;
+            color: #38bdf8;
+            font-family: monospace;
+            font-size: 0.75rem;
+            height: 140px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--accent);
+            color: #fff;
+            padding: 12px 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: none;
+            z-index: 9999;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            animation: slide-up 0.25s ease;
+            max-width: 90vw;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+
+        @media (max-width: 640px) {
+            .toast {
+                left: 50%;
+                right: auto;
+                transform: translateX(-50%);
+                bottom: 20px;
+                text-align: center;
+                width: max-content;
+                max-width: 90vw;
+            }
+        }
+
+        @keyframes slide-up {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        /* INPUT FIELD STYLES (Used in Card 8) */
+        .login-input-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .login-input-wrap i.prefix-icon {
+            position: absolute;
+            left: 14px;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            pointer-events: none;
+        }
+
+        .login-input {
+            width: 100%;
+            padding: 12px 14px 12px 38px;
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 0.88rem;
+            font-family: inherit;
+            transition: all 0.2s;
+            outline: none;
+        }
+
+        .login-input:focus {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+            background: rgba(0, 0, 0, 0.65);
+        }
+
+        .login-toggle-eye {
+            position: absolute;
+            right: 12px;
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 0.9rem;
+            padding: 4px;
+        }
+
+        .login-toggle-eye:hover {
+            color: #fff;
+        }
+
+
+
+        @media (max-width: 640px) {
+            .header { padding: 12px 14px; }
+            .grid { grid-template-columns: 1fr; }
+            .brand h1 { font-size: 1.05rem; }
+            .btn { font-size: 0.72rem; padding: 6px 10px; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- MAIN DASHBOARD CONTAINER -->
+    <div id="dashboard-container">
+
+    <!-- HEADER -->
+    <div class="header">
+        <div class="brand">
+            <div class="brand-icon"><i class="fa-solid fa-bolt"></i></div>
+            <div>
+                <h1 data-i18n="title_app">JACKTOR AUDIO FRAMEWORK</h1>
+                <p data-i18n="subtitle_app">Hi-Fi Amplifier DSP & Bit-Perfect Engine • Realme C15 GSI</p>
+            </div>
+        </div>
+        <div class="header-actions">
+            <span class="badge active pulse" id="badge-live" data-i18n="badge_live">REALTIME (1s)</span>
+            <span class="badge" id="badge-otg">USB: ...</span>
+            <span class="badge" id="badge-ssh" style="cursor: pointer;" onclick="document.getElementById('card-ssh')?.scrollIntoView({ behavior: 'smooth' })" title="SSH Server Endpoint (Click to view)"><i class="fa-solid fa-terminal"></i> SSH: ...</span>
+            <span class="badge" id="badge-ip"><i class="fa-solid fa-network-wired"></i> ADB: ...</span>
+            <button class="btn btn-lang" onclick="toggleLanguage()" id="btn-lang" title="Switch Language / Ganti Bahasa"><i class="fa-solid fa-globe"></i> <span id="lang-label">EN</span></button>
+            <button class="btn" onclick="manualRefresh()"><i class="fa-solid fa-rotate-right"></i> <span data-i18n="btn_refresh">Refresh</span></button>
+            <button class="btn btn-logout" onclick="handleLogout()" id="btn-header-logout" title="Logout Session"><i class="fa-solid fa-right-from-bracket"></i> <span data-i18n="btn_logout">Logout</span></button>
+        </div>
+    </div>
+
+    <!-- MAIN GRID -->
+    <div class="grid">
+
+        <!-- CARD 1: NOW PLAYING & AUDIO PIPELINE -->
+        <div class="card now-playing">
+            <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-music"></i> <span data-i18n="card1_title">Audio Stream & Track</span></div>
+                <span class="badge" id="track-status-badge" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            
+            <div class="track-hero">
+                <div class="track-art" id="track-art-box"><i class="fa-solid fa-headphones"></i></div>
+                <div class="track-info">
+                    <div class="marquee-box" id="box-track-title">
+                        <span class="track-title" id="track-title" data-i18n="waiting_audio">Menunggu informasi audio...</span>
+                    </div>
+                    <div class="marquee-box" id="box-track-artist">
+                        <span class="track-artist" id="track-artist" data-i18n="waiting_player">Menunggu pemutar musik...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pipeline Flow Diagram -->
+            <div class="pipeline-flow">
+                <div class="pipe-node">
+                    <div class="pipe-label">SOURCE</div>
+                    <div class="pipe-val" id="pipe-source">...</div>
+                </div>
+                <div class="pipe-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+                <div class="pipe-node">
+                    <div class="pipe-label">DSP ENGINE</div>
+                    <div class="pipe-val val-cyan" id="pipe-dsp">...</div>
+                </div>
+                <div class="pipe-arrow"><i class="fa-solid fa-arrow-right"></i></div>
+                <div class="pipe-node">
+                    <div class="pipe-label">OUTPUT DAC</div>
+                    <div class="pipe-val val-green" id="pipe-out">...</div>
+                </div>
+            </div>
+
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_audio_format">Audio Format</span>
+                <span class="stat-val" id="track-bit-depth" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row" id="row-track-bitrate" style="display: none;">
+                <span class="stat-label" data-i18n="stat_bitrate">Native Bitrate</span>
+                <span class="stat-val" id="track-bitrate">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_sample_rate">Sample Rate</span>
+                <span class="stat-val" id="track-sample-rate" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_active_player">Audio Player Client</span>
+                <span class="stat-val" id="track-app" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_stream_status">Stream State</span>
+                <span class="stat-val" id="track-state" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+        </div>
+
+        <!-- CARD 2: HARDWARE AUDIO DAC -->
+        <div class="card" style="border-top: 3px solid var(--accent-green);">
+            <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-sliders"></i> <span data-i18n="card2_title">Hardware Audio DAC</span></div>
+                <span class="badge" id="dac-status-badge" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_dac_name">DAC Hardware Device</span>
+                <span class="stat-val" id="stat-dac-name" data-i18n="waiting_dac">Menunggu DAC...</span>
+            </div>
+            <div class="stat-row" style="background: rgba(56, 189, 248, 0.08); padding: 6px 8px; border-radius: 8px;">
+                <span class="stat-label" style="color: #fff; font-weight: 600;" data-i18n="stat_dac_hw_cap">Maksimal Hardware DAC</span>
+                <span class="stat-val" id="stat-dac-hw-cap" style="color: var(--accent-cyan); font-weight: 700;" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_dac_rates">Rentang Frekuensi HW</span>
+                <span class="stat-val" id="stat-dac-rates" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row" style="background: rgba(16, 185, 129, 0.08); padding: 6px 8px; border-radius: 8px;">
+                <span class="stat-label" style="color: #fff; font-weight: 600;" data-i18n="stat_bit_depth">DAC Bit-Depth</span>
+                <span class="stat-val" id="stat-dac-bits" style="font-size: 1.05rem; font-weight: 800;" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_sampling_rate">Sampling Frequency</span>
+                <span class="stat-val" id="stat-dac-freq" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_alsa_format">ALSA Stream Format</span>
+                <span class="stat-val" id="stat-dac-format" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_alsa_card">ALSA Interface</span>
+                <span class="stat-val" id="stat-dac-card" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_buffer_size">Buffer / Period Size</span>
+                <span class="stat-val" id="stat-dac-buffer" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_resampler_mode">Resampler Mode</span>
+                <span class="stat-val" id="stat-resampler-mode" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+
+            <!-- Audio Resampler Mode Control -->
+            <div style="margin-top: 10px; margin-bottom: 8px;">
+                <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                    <i class="fa-solid fa-wave-square"></i> <span data-i18n="setting_resampler_mode">Audio Resampler</span>
+                </div>
+                <div class="btn-group" style="margin-top: 0;">
+                    <button class="btn btn-tweak" id="tw-resampler-match" onclick="applyTweak('resampler_mode', 'match_source')"><i class="fa-solid fa-compact-disc"></i> <span data-i18n="btn_resampler_match">Match Source</span></button>
+                    <button class="btn btn-tweak" id="tw-resampler-highest" onclick="applyTweak('resampler_mode', 'highest')"><i class="fa-solid fa-arrow-up-right-dots"></i> <span data-i18n="btn_resampler_highest">Tertinggi</span></button>
+                </div>
+            </div>
+
+            <!-- Volume Slider (0 - 25) -->
+            <div class="slider-container">
+                <div class="slider-header">
+                    <span data-i18n="stat_master_volume">Hardware Master Volume</span>
+                    <span id="vol-label" style="font-weight: 700; color: var(--accent);">-- / 25</span>
+                </div>
+                <input type="range" min="0" max="25" value="25" id="vol-slider" oninput="handleVolumeInput(this.value)" onchange="handleVolumeChange(this.value)">
+            </div>
+
+            <!-- Audio Hardware DSP Gain Control -->
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span class="stat-label" style="font-weight: 600;" data-i18n="stat_digital_gain">Hardware DSP Digital Gain</span>
+                    <span id="gain-digital-label" style="font-weight: 700; color: #4ade80;">-- dB</span>
+                </div>
+                <div class="btn-group" style="margin-top: 4px; margin-bottom: 8px;">
+                    <button class="btn btn-tweak" id="tw-gain-84" onclick="applyGainPreset('preset_stock')"><i class="fa-solid fa-volume-low"></i> <span data-i18n="btn_gain_stock">Stock (0 dB)</span></button>
+                    <button class="btn btn-tweak" id="tw-gain-90" onclick="applyGainPreset('preset_boost')"><i class="fa-solid fa-volume-high"></i> <span data-i18n="btn_gain_boost">+3 dB</span></button>
+                    <button class="btn btn-tweak" id="tw-gain-96" onclick="applyGainPreset('preset_loud')"><i class="fa-solid fa-bolt"></i> <span data-i18n="btn_gain_loud">+6 dB</span></button>
+                    <button class="btn btn-tweak" id="tw-gain-104" onclick="applyGainPreset('preset_max')"><i class="fa-solid fa-fire"></i> <span data-i18n="btn_gain_max">+10 dB</span></button>
+                </div>
+                <input type="range" min="64" max="114" value="84" id="gain-slider" oninput="handleGainInput(this.value)" onchange="handleGainChange(this.value)">
+                <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-dim); margin-top: 2px;">
+                    <span>-10 dB (64)</span>
+                    <span>Unity 0 dB (84)</span>
+                    <span>+6 dB (96)</span>
+                    <span>+15 dB (114)</span>
+                </div>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn" onclick="restartAudio()"><i class="fa-solid fa-rotate-right"></i> <span data-i18n="btn_restart_audio">Restart Audio</span></button>
+                <button class="btn" onclick="runCmd('cat /proc/asound/card1/stream0 2>/dev/null || cat /proc/asound/card0/stream0 2>/dev/null')"><i class="fa-solid fa-wave-square"></i> <span data-i18n="btn_view_stream">View DAC Stream</span></button>
+            </div>
+        </div>
+
+        <!-- CARD 3: CPU PERFORMANCE & THERMAL -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-microchip"></i> <span data-i18n="card3_title">CPU & Thermal Status</span></div>
+                <span class="badge" id="badge-cpu-status" data-i18n="waiting_data">Menunggu...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_cpu_little">CPU 0-3 (Little Cluster)</span>
+                <span class="stat-val" id="stat-cpu-little">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_cpu_big">CPU 4-7 (Big Cluster)</span>
+                <span class="stat-val" id="stat-cpu-big">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_cpu_temp">SoC Temperature</span>
+                <span class="stat-val" id="stat-cpu-temp">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_thread_affinity">Thread Affinity</span>
+                <span class="stat-val val-purple" data-i18n="stat_thread_affinity_val">Pinned to Big Cores (f0)</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_thermal_guard">Thermal Guard</span>
+                <span class="stat-val val-green" data-i18n="stat_thermal_guard_val">Active & Safe (Normal Clock)</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_speaker_engine">Internal Speaker DSP</span>
+                <span class="stat-val val-green">384 kHz • 32-bit (DRC Off)</span>
+            </div>
+
+            <!-- CPU Performance Profile Control -->
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+                <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                    <i class="fa-solid fa-gauge-high"></i> <span data-i18n="setting_cpu_governor">CPU Performance Profile</span>
+                </div>
+                <div class="btn-group" style="margin-top: 0;">
+                    <button class="btn btn-tweak" id="tw-cpu-perf" onclick="applyTweak('cpu_profile', 'perf')"><i class="fa-solid fa-bolt"></i> <span data-i18n="btn_cpu_perf">Max Perf</span></button>
+                    <button class="btn btn-tweak" id="tw-cpu-balanced" onclick="applyTweak('cpu_profile', 'balanced')"><i class="fa-solid fa-scale-balanced"></i> <span data-i18n="btn_cpu_balanced">Balanced</span></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- CARD 4: USB & POWER ARCHITECTURE -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-plug"></i> <span data-i18n="card4_title">USB & Power Architecture</span></div>
+                <span class="stat-val" id="otg-mode-label">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_ctrl_mode">USB Controller Mode</span>
+                <span class="stat-val" id="stat-ssusb-mode">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_vbus_volt">VBUS Output Voltage</span>
+                <span class="stat-val" id="stat-vbus">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_otg_cable">OTG Cable Connection</span>
+                <span class="stat-val" id="stat-otg-online">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_battery_status">Battery Power Source</span>
+                <span class="stat-val" id="stat-battery">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_udc_state">UDC Gadget State</span>
+                <span class="stat-val" id="stat-udc">...</span>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn btn-mode" id="btn-mode-host" onclick="setUsbMode('host')"><i class="fa-solid fa-server"></i> <span data-i18n="btn_host">Host</span></button>
+                <button class="btn btn-mode" id="btn-mode-device" onclick="setUsbMode('device')"><i class="fa-solid fa-mobile-screen"></i> <span data-i18n="btn_gadget">Gadget</span></button>
+                <button class="btn btn-mode" id="btn-mode-auto" onclick="setUsbMode('auto')"><i class="fa-solid fa-wand-magic-sparkles"></i> <span data-i18n="btn_auto">Auto</span></button>
+            </div>
+
+            <!-- 24/7 Battery Bypass Control -->
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+                <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                    <i class="fa-solid fa-car-battery"></i> <span data-i18n="setting_battery_bypass">24/7 Battery Bypass</span>
+                </div>
+                <div class="btn-group" style="margin-top: 0;">
+                    <button class="btn btn-tweak" id="tw-bypass-1" onclick="applyTweak('bypass', 'true')"><i class="fa-solid fa-plug-circle-bolt"></i> <span data-i18n="btn_bypass_on">Bypass 100%</span></button>
+                    <button class="btn btn-tweak" id="tw-bypass-0" onclick="applyTweak('bypass', 'false')"><i class="fa-solid fa-battery-half"></i> <span data-i18n="btn_bypass_off">Standard</span></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- CARD 5: CONNECTED USB DEVICES -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-circle-nodes"></i> <span data-i18n="card5_title">Connected USB Devices</span></div>
+                <span class="badge" id="usb-count">...</span>
+            </div>
+            <div id="usb-device-container" style="max-height: 220px; overflow-y: auto;">
+                <div class="usb-device-card" data-i18n="usb_loading">Memuat daftar perangkat USB...</div>
+            </div>
+            <div class="btn-group">
+                <button class="btn" onclick="runCmd('amp-status')"><i class="fa-solid fa-file-waveform"></i> <span data-i18n="btn_amp_status">Amp Summary</span></button>
+                <button class="btn" onclick="runCmd('lsusb')"><i class="fa-solid fa-list"></i> <span data-i18n="btn_lsusb_raw">lsusb Raw</span></button>
+            </div>
+        </div>
+
+        <!-- CARD 6: SYSTEM & DISPLAY -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title"><i class="fa-solid fa-desktop"></i> <span data-i18n="card6_title">System & Display</span></div>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_device">Device Model</span>
+                <span class="stat-val" id="stat-device">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_kernel">Kernel Release</span>
+                <span class="stat-val" id="stat-kernel">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_adb_ip">ADB Wi-Fi Address</span>
+                <span class="stat-val" id="stat-ip-port">...</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label" data-i18n="stat_uptime">System Uptime</span>
+                <span class="stat-val" id="stat-uptime">...</span>
+            </div>
+
+            <!-- Display & System Controls -->
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-direction: column; gap: 10px;">
+                <!-- Orientation -->
+                <div class="setting-item">
+                    <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                        <i class="fa-solid fa-rotate"></i> <span data-i18n="setting_orientation">Display Orientation</span>
+                    </div>
+                    <div class="btn-group" style="margin-top: 0;">
+                        <button class="btn btn-tweak" id="tw-rot-1" onclick="applyTweak('rotation', 1)"><i class="fa-solid fa-mobile-screen fa-rotate-90"></i> <span data-i18n="btn_landscape">Landscape (1)</span></button>
+                        <button class="btn btn-tweak" id="tw-rot-0" onclick="applyTweak('rotation', 0)"><i class="fa-solid fa-mobile-screen"></i> <span data-i18n="btn_portrait">Portrait (0)</span></button>
+                        <button class="btn btn-tweak" id="tw-rot-3" onclick="applyTweak('rotation', 3)"><i class="fa-solid fa-mobile-screen fa-rotate-270"></i> <span data-i18n="btn_reverse_land">Reverse (3)</span></button>
+                    </div>
+                </div>
+
+                <!-- Resolution & Density -->
+                <div class="setting-item">
+                    <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                        <i class="fa-solid fa-maximize"></i> <span data-i18n="setting_res_density">Resolution & Density</span>
+                    </div>
+                    <div class="btn-group" style="margin-top: 0;">
+                        <button class="btn btn-tweak" id="tw-res-custom" onclick="applyTweak('resolution', '720x1460')">720x1460</button>
+                        <button class="btn btn-tweak" id="tw-den-custom" onclick="applyTweak('density', '256')">256 DPI</button>
+                        <button class="btn btn-tweak" id="tw-res-reset" onclick="applyTweak('resolution', 'reset'); applyTweak('density', 'reset');"><i class="fa-solid fa-arrow-rotate-left"></i> <span data-i18n="btn_stock_display">Stock</span></button>
+                    </div>
+                </div>
+
+                <!-- Screen Always-On -->
+                <div class="setting-item">
+                    <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                        <i class="fa-solid fa-sun"></i> <span data-i18n="setting_stayon">Screen Always-On (Stay Awake)</span>
+                    </div>
+                    <div class="btn-group" style="margin-top: 0;">
+                        <button class="btn btn-tweak" id="tw-stay-1" onclick="applyTweak('stayon', 'true')"><i class="fa-solid fa-bolt"></i> <span data-i18n="btn_always_on">Always On (24/7)</span></button>
+                        <button class="btn btn-tweak" id="tw-stay-0" onclick="applyTweak('stayon', 'false')"><i class="fa-solid fa-clock"></i> <span data-i18n="btn_std_timeout">Normal (30s)</span></button>
+                    </div>
+                </div>
+
+                <!-- Lockscreen & Service -->
+                <div class="setting-item">
+                    <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                        <i class="fa-solid fa-lock-open"></i> <span data-i18n="setting_lockscreen">Lockscreen Security & Service</span>
+                    </div>
+                    <div class="btn-group" style="margin-top: 0;">
+                        <button class="btn btn-tweak" id="tw-lock-1" onclick="applyTweak('lockscreen', 'disabled')"><i class="fa-solid fa-unlock"></i> <span data-i18n="btn_lock_disabled">Direct Boot (No Lock)</span></button>
+                        <button class="btn btn-tweak" id="tw-lock-0" onclick="applyTweak('lockscreen', 'enabled')"><i class="fa-solid fa-lock"></i> <span data-i18n="btn_lock_enabled">Enabled</span></button>
+                        <button class="btn btn-tweak" onclick="applyTweak('restart_adb', '')"><i class="fa-solid fa-network-wired"></i> <span data-i18n="btn_restart_adb">Restart ADB</span></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CARD 7: MEMORY & SWAP MANAGEMENT -->
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">
+                    <i class="fa-solid fa-memory"></i>
+                    <span data-i18n="card7_title">Memory & SWAP Expansion</span>
+                </div>
+                <span class="badge" id="badge-swap-usage" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">
+                    <i class="fa-solid fa-chart-pie"></i> <span id="stat-swap-text" data-i18n="waiting_swap">Menunggu status SWAP...</span>
+                </span>
+            </div>
+            
+            <p style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 12px;" data-i18n="desc_swap_info">
+                Swapfile on internal storage combined with zRAM keeps music players & navigation cached safely without audio hiccups.
+            </p>
+
+            <div class="setting-item">
+                <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                    <i class="fa-solid fa-hard-drive"></i> <span data-i18n="setting_swap_title">Virtual RAM Size</span>
+                </div>
+                <div class="btn-group" style="margin-top: 0;">
+                    <button class="btn btn-tweak" id="tw-swap-0" onclick="applySwapTweak(0)"><i class="fa-solid fa-ban"></i> <span data-i18n="btn_swap_off">Off (0 MB)</span></button>
+                    <button class="btn btn-tweak" id="tw-swap-2048" onclick="applySwapTweak(2048)"><i class="fa-solid fa-sd-card"></i> 2 GB</button>
+                    <button class="btn btn-tweak" id="tw-swap-3072" onclick="applySwapTweak(3072)"><i class="fa-solid fa-star" style="color: #fbbf24;"></i> <span data-i18n="btn_swap_3gb">3 GB (Recommended)</span></button>
+                    <button class="btn btn-tweak" id="tw-swap-4096" onclick="applySwapTweak(4096)"><i class="fa-solid fa-server"></i> 4 GB</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tweak Action Feedback Toast -->
+        <div id="tweak-feedback" style="grid-column: 1 / -1; font-size: 0.85rem; color: #4ade80; display: none; text-align: center; padding: 10px 14px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 10px;"></div>
+
+        <!-- CARD 8: OPENSSH SERVER & REMOTE ACCESS (Spanning Full Width) -->
+        <div class="card" id="card-ssh" style="grid-column: 1 / -1;">
+            <div class="card-header">
+                <div class="card-title">
+                    <i class="fa-solid fa-server"></i>
+                    <span data-i18n="card8_title">OpenSSH Server & Remote Access</span>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span class="badge" id="badge-ssh-status"><i class="fa-solid fa-circle-notch fa-spin"></i> Checking...</span>
+                    <span class="badge" style="background: rgba(255, 255, 255, 0.08);"><i class="fa-solid fa-shield-halved"></i> SFTP & Shell</span>
+                </div>
+            </div>
+
+            <!-- Server Status & Connect Helper Grid -->
+            <div class="setting-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+                <!-- Status & Quick Controls -->
+                <div class="setting-item">
+                    <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                        <i class="fa-solid fa-power-off"></i> <span data-i18n="ssh_service_ctrl">Service Controls</span>
+                    </div>
+                    <div class="btn-group" style="margin-top: 0;">
+                        <button class="btn btn-tweak" id="btn-ssh-start" onclick="sshAction('start')"><i class="fa-solid fa-play"></i> <span data-i18n="btn_start">Start</span></button>
+                        <button class="btn btn-tweak" id="btn-ssh-stop" onclick="sshAction('stop')"><i class="fa-solid fa-stop"></i> <span data-i18n="btn_stop">Stop</span></button>
+                        <button class="btn btn-tweak" id="btn-ssh-restart" onclick="sshAction('restart')"><i class="fa-solid fa-rotate-right"></i> <span data-i18n="btn_restart">Restart</span></button>
+                    </div>
+                </div>
+
+                <!-- Autostart on Boot -->
+                <div class="setting-item">
+                    <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                        <i class="fa-solid fa-robot"></i> <span data-i18n="ssh_autostart_label">Autostart on Boot</span>
+                    </div>
+                    <div class="btn-group" style="margin-top: 0;">
+                        <button class="btn btn-tweak" id="btn-ssh-auto-1" onclick="sshSetAutostart(1)"><i class="fa-solid fa-check"></i> <span data-i18n="btn_enabled">Enabled</span></button>
+                        <button class="btn btn-tweak" id="btn-ssh-auto-0" onclick="sshSetAutostart(0)"><i class="fa-solid fa-xmark"></i> <span data-i18n="btn_disabled">Disabled</span></button>
+                    </div>
+                </div>
+
+                <!-- Port Configuration -->
+                <div class="setting-item">
+                    <div class="stat-label" style="font-weight: 600; margin-bottom: 6px;">
+                        <i class="fa-solid fa-network-wired"></i> <span data-i18n="ssh_port_label">SSH Listening Port</span>
+                    </div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="number" id="ssh-port-input" class="cmd-input" style="width: 100px; padding: 6px 10px; margin-bottom: 0;" value="22" min="1" max="65535">
+                        <button class="btn btn-tweak" onclick="sshSetPort()"><i class="fa-solid fa-floppy-disk"></i> <span data-i18n="btn_save_port">Apply Port</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Connection Guide & One-Click Copy -->
+            <div style="margin-top: 14px; padding: 12px 14px; background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-size: 0.8rem; font-weight: 600; color: var(--accent-cyan);"><i class="fa-solid fa-terminal"></i> <span data-i18n="ssh_cmd_guide">Quick Terminal Connection (Root / Shell)</span></span>
+                    <span style="font-size: 0.72rem; color: var(--text-dim);" id="ssh-endpoint-label">Host: 192.168.1.11:22</span>
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                    <div style="flex: 1; min-width: 260px; display: flex; align-items: center; background: rgba(0, 0, 0, 0.4); border-radius: 8px; padding: 4px 10px; border: 1px solid rgba(255,255,255,0.05);">
+                        <code id="ssh-cmd-root" style="flex: 1; font-size: 0.78rem; color: #a5f3fc; font-family: monospace;">ssh -p 22 root@192.168.1.11</code>
+                        <button class="btn" style="padding: 3px 8px; font-size: 0.7rem; margin-left: 6px;" onclick="copySshCmd('root')"><i class="fa-solid fa-copy"></i> <span data-i18n="btn_copy">Copy</span></button>
+                    </div>
+                    <div style="flex: 1; min-width: 260px; display: flex; align-items: center; background: rgba(0, 0, 0, 0.4); border-radius: 8px; padding: 4px 10px; border: 1px solid rgba(255,255,255,0.05);">
+                        <code id="ssh-cmd-shell" style="flex: 1; font-size: 0.78rem; color: #a5f3fc; font-family: monospace;">ssh -p 22 shell@192.168.1.11</code>
+                        <button class="btn" style="padding: 3px 8px; font-size: 0.7rem; margin-left: 6px;" onclick="copySshCmd('shell')"><i class="fa-solid fa-copy"></i> <span data-i18n="btn_copy">Copy</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabbed Sub-panels: Authorized Keys, Config Editor, Server Log -->
+            <div style="margin-top: 14px;">
+                <div style="display: flex; gap: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); padding-bottom: 8px; flex-wrap: wrap;">
+                    <button class="btn btn-tweak active" id="tab-btn-keys" onclick="switchSshTab('keys')"><i class="fa-solid fa-key"></i> <span data-i18n="tab_ssh_keys">Authorized Keys</span></button>
+                    <button class="btn btn-tweak" id="tab-btn-config" onclick="switchSshTab('config')"><i class="fa-solid fa-file-lines"></i> <span data-i18n="tab_ssh_config">Config (sshd_config)</span></button>
+                    <button class="btn btn-tweak" id="tab-btn-logs" onclick="switchSshTab('logs')"><i class="fa-solid fa-list-check"></i> <span data-i18n="tab_ssh_logs">Server Log</span></button>
+                    <button class="btn btn-tweak" id="tab-btn-password" onclick="switchSshTab('password')"><i class="fa-solid fa-lock"></i> <span data-i18n="tab_ssh_password">Password & Auth</span></button>
+                </div>
+
+                <!-- Sub-panel 1: Authorized Keys Manager -->
+                <div id="ssh-subpanel-keys" style="margin-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-tweak active" id="btn-user-root" onclick="setKeyUser('root')"><i class="fa-solid fa-user-shield"></i> Root (uid 0)</button>
+                            <button class="btn btn-tweak" id="btn-user-shell" onclick="setKeyUser('shell')"><i class="fa-solid fa-user"></i> Shell (uid 2000)</button>
+                        </div>
+                        <button class="btn" onclick="loadSshKeys()"><i class="fa-solid fa-arrows-rotate"></i> <span data-i18n="btn_refresh_keys">Refresh Keys</span></button>
+                    </div>
+                    
+                    <div id="ssh-keys-container" style="max-height: 220px; overflow-y: auto; margin-bottom: 12px;">
+                        <!-- Dynamically populated key items -->
+                    </div>
+
+                    <!-- Add New Key Form -->
+                    <div style="background: rgba(0, 0, 0, 0.2); padding: 12px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06);">
+                        <div style="font-size: 0.78rem; font-weight: 600; margin-bottom: 6px; color: var(--accent-cyan);"><i class="fa-solid fa-plus"></i> <span data-i18n="add_key_title">Add New Public Key (Paste ~/.ssh/id_ed25519.pub / id_rsa.pub)</span></div>
+                        <textarea id="ssh-new-key-input" class="cmd-input" style="width: 100%; height: 60px; font-size: 0.75rem; resize: vertical; margin-bottom: 8px;" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@laptop"></textarea>
+                        <button class="btn btn-primary" onclick="addSshKey()"><i class="fa-solid fa-key"></i> <span data-i18n="btn_add_key">Add Public Key</span></button>
+                    </div>
+                </div>
+
+                <!-- Sub-panel 2: Config Editor -->
+                <div id="ssh-subpanel-config" style="margin-top: 12px; display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <span style="font-size: 0.78rem; color: var(--text-dim);" data-i18n="config_desc">Direct edit of /data/adb/ssh/sshd_config (Auto-restarts server on save)</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn" onclick="loadSshConfig()"><i class="fa-solid fa-arrows-rotate"></i> <span data-i18n="btn_reload">Reload</span></button>
+                            <button class="btn btn-primary" onclick="saveSshConfig()"><i class="fa-solid fa-floppy-disk"></i> <span data-i18n="btn_save">Save Config</span></button>
+                        </div>
+                    </div>
+                    <textarea id="ssh-config-editor" class="cmd-input" style="width: 100%; height: 260px; font-family: monospace; font-size: 0.76rem; line-height: 1.4; resize: vertical;"></textarea>
+                </div>
+
+                <!-- Sub-panel 3: Server Log Viewer -->
+                <div id="ssh-subpanel-logs" style="margin-top: 12px; display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <span style="font-size: 0.78rem; color: var(--text-dim);" data-i18n="log_desc">Recent server activities from /data/adb/ssh/sshd.log</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn" onclick="loadSshLog()"><i class="fa-solid fa-arrows-rotate"></i> <span data-i18n="btn_refresh">Refresh</span></button>
+                            <button class="btn" onclick="clearSshLog()"><i class="fa-solid fa-trash"></i> <span data-i18n="btn_clear_log">Clear Log</span></button>
+                        </div>
+                    </div>
+                    <div id="ssh-log-viewer" class="terminal" style="height: 240px; margin-bottom: 0;">Loading logs...</div>
+                </div>
+
+                <!-- Sub-panel 4: Synchronized Password & Auth Manager -->
+                <div id="ssh-subpanel-password" style="margin-top: 12px; display: none;">
+                    <div style="background: rgba(0, 0, 0, 0.25); padding: 16px 18px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06); max-width: 520px;">
+                        <div style="font-size: 0.85rem; font-weight: 600; color: var(--accent-cyan); margin-bottom: 4px;">
+                            <i class="fa-solid fa-shield-halved"></i> <span data-i18n="pwd_sync_title">Synchronized Password (Webroot & SSH)</span>
+                        </div>
+                        <div style="font-size: 0.74rem; color: var(--text-dim); margin-bottom: 16px;" data-i18n="pwd_sync_desc">
+                            Changing your password here updates both the Webroot dashboard login and the OpenSSH server password for user root instantly.
+                        </div>
+
+                        <form id="change-pwd-form" onsubmit="submitChangePassword(event)">
+                            <div style="margin-bottom: 12px;">
+                                <label style="display: block; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;" data-i18n="pwd_current_label">Current Password</label>
+                                <div class="login-input-wrap">
+                                    <i class="fa-solid fa-lock prefix-icon"></i>
+                                    <input type="password" id="input-curr-pwd" class="login-input" required placeholder="••••••••••••" autocomplete="current-password" style="padding: 9px 14px 9px 38px; font-size: 0.82rem;">
+                                    <button type="button" class="login-toggle-eye" onclick="togglePasswordVisibility('input-curr-pwd', this)">
+                                        <i class="fa-solid fa-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div style="margin-bottom: 12px;">
+                                <label style="display: block; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;" data-i18n="pwd_new_label">New Password</label>
+                                <div class="login-input-wrap">
+                                    <i class="fa-solid fa-key prefix-icon"></i>
+                                    <input type="password" id="input-new-pwd" class="login-input" required placeholder="Min. 4 characters" autocomplete="new-password" style="padding: 9px 14px 9px 38px; font-size: 0.82rem;">
+                                    <button type="button" class="login-toggle-eye" onclick="togglePasswordVisibility('input-new-pwd', this)">
+                                        <i class="fa-solid fa-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div style="margin-bottom: 16px;">
+                                <label style="display: block; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); margin-bottom: 4px;" data-i18n="pwd_confirm_label">Confirm New Password</label>
+                                <div class="login-input-wrap">
+                                    <i class="fa-solid fa-circle-check prefix-icon"></i>
+                                    <input type="password" id="input-confirm-pwd" class="login-input" required placeholder="Repeat new password" autocomplete="new-password" style="padding: 9px 14px 9px 38px; font-size: 0.82rem;">
+                                    <button type="button" class="login-toggle-eye" onclick="togglePasswordVisibility('input-confirm-pwd', this)">
+                                        <i class="fa-solid fa-eye"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <button type="submit" id="btn-save-pwd" class="btn btn-primary" style="padding: 9px 18px; font-weight: 600;">
+                                <i class="fa-solid fa-floppy-disk"></i> <span data-i18n="pwd_btn_save">Update & Sync Password</span>
+                            </button>
+                        </form>
+
+                        <!-- Current Session & Logout Action -->
+                        <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                            <div>
+                                <div style="font-size: 0.82rem; font-weight: 600; color: #fff;">
+                                    <i class="fa-solid fa-user-shield" style="color: var(--accent-cyan); margin-right: 6px;"></i>
+                                    <span data-i18n="session_active_label">Current Session: Logged in as</span> <code style="color: var(--accent-cyan); font-weight: bold;">root</code>
+                                </div>
+                                <div style="font-size: 0.72rem; color: var(--text-dim);" data-i18n="session_logout_desc">
+                                    Terminate active browser session and return to login screen.
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-logout" onclick="handleLogout()" style="padding: 8px 18px;">
+                                <i class="fa-solid fa-right-from-bracket"></i> <span data-i18n="btn_logout">Logout</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- TERMINAL & DIAGNOSTICS CARD -->
+    <div class="card" style="margin-bottom: 30px;">
+        <div class="card-header">
+            <div class="card-title"><i class="fa-solid fa-terminal"></i> <span data-i18n="terminal_title">Diagnostic Terminal</span></div>
+            <span class="badge" data-i18n="terminal_badge">Root Privileged</span>
+        </div>
+        <div class="cmd-input-group">
+            <input type="text" class="cmd-input" id="cmd-input" placeholder="Type command (e.g. lsusb, amp-status, tinymix)..." onkeydown="if(event.key==='Enter') executeCustomCmd()">
+            <button class="btn btn-primary" onclick="executeCustomCmd()"><i class="fa-solid fa-play"></i> <span data-i18n="btn_execute">Run</span></button>
+        </div>
+        <div class="btn-group" style="margin-top: 10px;">
+            <button class="btn" onclick="runCmd('amp-status')"><i class="fa-solid fa-file-waveform"></i> amp-status</button>
+            <button class="btn" onclick="runCmd('cat /proc/asound/card1/stream0 2>/dev/null || cat /proc/asound/card0/stream0 2>/dev/null')"><i class="fa-solid fa-wave-square"></i> stream0</button>
+            <button class="btn" onclick="runCmd('otg-trigger status')"><i class="fa-solid fa-bolt"></i> otg status</button>
+            <button class="btn" onclick="runCmd('cat /proc/asound/cards')"><i class="fa-solid fa-music"></i> sound cards</button>
+        </div>
+        <div class="terminal" id="terminal-out" style="margin-top: 10px;">Console output will be displayed here...</div>
+    </div>
+
+    <!-- DASHBOARD FOOTER WITH LOGOUT -->
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; margin-bottom: 30px; background: rgba(0, 0, 0, 0.35); border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.06); flex-wrap: wrap; gap: 12px;">
+        <div style="font-size: 0.78rem; color: var(--text-dim);">
+            <i class="fa-solid fa-shield-halved" style="color: var(--accent-cyan); margin-right: 6px;"></i>
+            <span data-i18n="footer_auth_info">Jacktor Audio Framework • Authenticated as <strong>root</strong></span>
+        </div>
+        <button class="btn btn-logout" onclick="handleLogout()" style="padding: 7px 18px;">
+            <i class="fa-solid fa-right-from-bracket"></i> <span data-i18n="btn_logout">Logout</span>
+        </button>
+    </div>
+
+    </div> <!-- /#dashboard-container -->
+
+    <div class="toast" id="toast">Notification</div>
+
+    <script>
+        // --- TRANSLATION / I18N DICTIONARY ---
+        const i18n = {
+            en: {
+                title_app: "JACKTOR AUDIO FRAMEWORK",
+                subtitle_app: "Hi-Fi Amplifier DSP & Bit-Perfect Engine • Realme C15 GSI",
+                badge_live: "REALTIME (1s)",
+                btn_refresh: "Refresh",
+                
+                card1_title: "Audio Stream & Track",
+                waiting_data: "Waiting...",
+                waiting_audio: "Waiting for audio stream...",
+                waiting_player: "Waiting for music player...",
+                waiting_dac: "Waiting for DAC...",
+                waiting_swap: "Waiting for SWAP...",
+                track_placeholder_title: "No Music Playing",
+                track_placeholder_artist: "Audio Engine Standby",
+                stat_audio_format: "Audio Format",
+                stat_bitrate: "Native Bitrate",
+                stat_sample_rate: "Sample Rate",
+                stat_active_player: "Audio Player Client",
+                stat_stream_status: "Stream State",
+                
+                card2_title: "Hardware Audio DAC",
+                stat_dac_name: "DAC Hardware Device",
+                stat_dac_hw_cap: "Hardware Max Capability",
+                stat_dac_rates: "Hardware Rates Range",
+                stat_bit_depth: "DAC Bit-Depth",
+                stat_sampling_rate: "Sampling Frequency",
+                stat_alsa_format: "ALSA Stream Format",
+                stat_alsa_card: "ALSA Interface",
+                stat_buffer_size: "Buffer / Period Size",
+                stat_master_volume: "Hardware Master Volume",
+                btn_restart_audio: "Restart Audio",
+                btn_view_stream: "View DAC Stream",
+                
+                card3_title: "CPU & Thermal Status",
+                stat_cpu_little: "CPU 0-3 (Little Cluster)",
+                stat_cpu_big: "CPU 4-7 (Big Cluster)",
+                stat_cpu_temp: "SoC Temperature",
+                stat_thread_affinity: "Thread Affinity",
+                stat_thread_affinity_val: "Pinned to Big Cores (f0)",
+                stat_thermal_guard: "Thermal Guard",
+                stat_thermal_guard_val: "Active & Safe (Normal Clock)",
+                stat_speaker_engine: "Internal Speaker DSP",
+                stat_battery_status: "Battery Power Source",
+                
+                card4_title: "USB & Power Architecture",
+                stat_ctrl_mode: "USB Controller Mode",
+                stat_vbus_volt: "VBUS Output Voltage",
+                stat_otg_cable: "OTG Cable Connection",
+                stat_udc_state: "UDC Gadget State",
+                btn_host: "Host",
+                btn_gadget: "Gadget",
+                btn_auto: "Auto",
+                
+                card5_title: "Connected USB Devices",
+                usb_loading: "Loading connected USB devices...",
+                btn_amp_status: "Amp Summary",
+                btn_lsusb_raw: "lsusb Raw",
+                
+                card6_title: "System & Display",
+                stat_device: "Device Model",
+                stat_kernel: "Kernel Release",
+                stat_adb_ip: "ADB Wi-Fi Address",
+                stat_uptime: "System Uptime",
+                
+                card7_title: "Memory & SWAP Expansion",
+                card7_badge: "Hardware Engine",
+                card7_desc: "Direct hardware and kernel module configurations from Jacktor Audio Framework.",
+                setting_orientation: "Display Orientation",
+                btn_landscape: "Landscape (1)",
+                btn_portrait: "Portrait (0)",
+                btn_reverse_land: "Reverse (3)",
+                setting_res_density: "Resolution & Density",
+                btn_stock_display: "Stock",
+                setting_stayon: "Screen Always-On (Stay Awake)",
+                btn_always_on: "Always On (24/7)",
+                btn_std_timeout: "Normal (30s)",
+                setting_lockscreen: "Lockscreen Security",
+                btn_lock_disabled: "Direct Boot (No Lock)",
+                btn_lock_enabled: "Enabled",
+                setting_battery_bypass: "24/7 Battery Bypass",
+                btn_bypass_on: "Bypass 100%",
+                btn_bypass_off: "Standard",
+                setting_cpu_governor: "CPU Performance Profile",
+                btn_cpu_perf: "Max Performance",
+                btn_cpu_balanced: "Balanced",
+                setting_resampler_mode: "Audio Resampler",
+                btn_resampler_match: "Match Source",
+                btn_resampler_highest: "Highest",
+                stat_resampler_mode: "Resampler Mode",
+                setting_system_services: "Service Management",
+                btn_restart_adb: "Restart ADB",
+                stat_digital_gain: "Hardware DSP Digital Gain",
+                btn_gain_stock: "Stock (0 dB)",
+                btn_gain_boost: "+3 dB",
+                btn_gain_loud: "+6 dB",
+                btn_gain_max: "+10 dB",
+                setting_swap_title: "Virtual RAM & SWAP Expansion",
+                btn_swap_off: "Off (0 MB)",
+                btn_swap_3gb: "3 GB (Recommended)",
+                desc_swap_info: "3 GB Swapfile on internal storage combined with zRAM keeps music players & navigation cached safely without audio hiccups.",
+                
+                card8_title: "OpenSSH Server & Remote Access",
+                ssh_service_ctrl: "Service Controls",
+                btn_start: "Start",
+                btn_stop: "Stop",
+                btn_restart: "Restart",
+                ssh_autostart_label: "Autostart on Boot",
+                btn_enabled: "Enabled",
+                btn_disabled: "Disabled",
+                ssh_port_label: "SSH Listening Port",
+                btn_save_port: "Apply Port",
+                ssh_cmd_guide: "Quick Terminal Connection (Root / Shell)",
+                btn_copy: "Copy",
+                tab_ssh_keys: "Authorized Keys",
+                tab_ssh_config: "Config (sshd_config)",
+                tab_ssh_logs: "Server Log",
+                tab_ssh_password: "Password & Auth",
+                btn_refresh_keys: "Refresh Keys",
+                add_key_title: "Add New Public Key (Paste ~/.ssh/id_ed25519.pub / id_rsa.pub)",
+                btn_add_key: "Add Public Key",
+                config_desc: "Direct edit of /data/adb/ssh/sshd_config (Auto-restarts server on save)",
+                btn_reload: "Reload",
+                btn_save: "Save Config",
+                log_desc: "Recent server activities from /data/adb/ssh/sshd.log",
+                btn_clear_log: "Clear Log",
+                no_keys_found: "No authorized keys configured for this user yet.",
+
+                // SSH Password & Auth
+                pwd_sync_title: "Synchronized Password (Webroot & SSH)",
+                pwd_sync_desc: "Changing your password here updates both the Webroot dashboard login and the OpenSSH server password for user root instantly.",
+                pwd_current_label: "Current Password",
+                pwd_new_label: "New Password",
+                pwd_confirm_label: "Confirm New Password",
+                pwd_btn_save: "Update & Sync Password",
+                pwd_err_match: "New passwords do not match!",
+                pwd_err_len: "New password must be at least 4 characters long!",
+                pwd_updating: "Updating password...",
+                pwd_success: "Password updated successfully for Webroot and SSH!",
+
+                // Auth & Login
+                btn_logout: "Logout",
+                session_active_label: "Current Session: Logged in as",
+                session_logout_desc: "Terminate active browser session and return to login screen.",
+                footer_auth_info: "Jacktor Audio Framework • Authenticated as root",
+                login_title: "Sign In to Jacktor Dashboard",
+                login_desc: "Enter system credentials to access audio DSP engine & hardware settings",
+                login_err_invalid: "Invalid username or password. Default is root / admin123",
+                login_user_label: "Username",
+                login_pass_label: "Password",
+                login_remember: "Remember session on this device",
+                login_btn: "Login to System",
+                login_logging_in: "Logging in...",
+                
+                terminal_title: "Diagnostic Terminal",
+                terminal_badge: "Root Privileged",
+                btn_execute: "Run",
+                
+                // Telemetry strings
+                vbus_active: "VBUS Active",
+                vbus_idle: "Host Standby - Idle",
+                vbus_off: "Off",
+                cable_plugged: "Plugged / Active",
+                cable_disconnected: "Disconnected",
+                usb_no_devices: "No external USB devices detected."
+            },
+            id: {
+                title_app: "JACKTOR AUDIO FRAMEWORK",
+                subtitle_app: "Hi-Fi Amplifier DSP & Bit-Perfect Engine • Realme C15 GSI",
+                badge_live: "REALTIME (1s)",
+                btn_refresh: "Segarkan",
+                
+                card1_title: "Audio Stream & Judul Lagu",
+                waiting_data: "Menunggu data...",
+                waiting_audio: "Menunggu informasi audio...",
+                waiting_player: "Menunggu pemutar musik...",
+                waiting_dac: "Menunggu perangkat DAC...",
+                waiting_swap: "Menunggu status SWAP...",
+                track_placeholder_title: "Tidak Ada Musik Diputar",
+                track_placeholder_artist: "Audio Engine Standby",
+                stat_audio_format: "Format Audio",
+                stat_bitrate: "Bitrate Asli",
+                stat_sample_rate: "Sample Rate",
+                stat_active_player: "Aplikasi Pemutar Musik",
+                stat_stream_status: "Status Stream",
+                
+                card2_title: "Hardware Audio DAC",
+                stat_dac_name: "Perangkat DAC Hardware",
+                stat_dac_hw_cap: "Maksimal Hardware DAC",
+                stat_dac_rates: "Rentang Frekuensi HW",
+                stat_bit_depth: "Bit-Depth DAC",
+                stat_sampling_rate: "Frekuensi Sampling",
+                stat_alsa_format: "Format Stream ALSA",
+                stat_alsa_card: "Antarmuka ALSA",
+                stat_buffer_size: "Ukuran Buffer / Periode",
+                stat_master_volume: "Volume Master Perangkat",
+                btn_restart_audio: "Restart Audio",
+                btn_view_stream: "Lihat Stream DAC",
+                
+                card3_title: "Status CPU & Suhu",
+                stat_cpu_little: "CPU 0-3 (Cluster Little)",
+                stat_cpu_big: "CPU 4-7 (Cluster Big)",
+                stat_cpu_temp: "Suhu SoC",
+                stat_thread_affinity: "Afinitas Thread",
+                stat_thread_affinity_val: "Dipasakkan ke Core Big (f0)",
+                stat_thermal_guard: "Proteksi Suhu",
+                stat_thermal_guard_val: "Aktif & Aman (Clock Normal)",
+                stat_speaker_engine: "DSP Speaker Internal",
+                stat_battery_status: "Sumber Daya Baterai",
+                
+                card4_title: "Arsitektur USB & Daya",
+                stat_ctrl_mode: "Mode Kontroler USB",
+                stat_vbus_volt: "Tegangan Jalur VBUS",
+                stat_otg_cable: "Koneksi Kabel OTG",
+                stat_udc_state: "Status UDC Gadget",
+                btn_host: "Host",
+                btn_gadget: "Gadget",
+                btn_auto: "Auto",
+                
+                card5_title: "Perangkat USB Tersambung",
+                usb_loading: "Memuat daftar perangkat USB...",
+                btn_amp_status: "Ringkasan Amp",
+                btn_lsusb_raw: "lsusb Mentah",
+                
+                card6_title: "Sistem & Tampilan",
+                stat_device: "Model Perangkat",
+                stat_kernel: "Versi Kernel",
+                stat_adb_ip: "Alamat IP ADB Wi-Fi",
+                stat_uptime: "Waktu Aktif Sistem",
+                
+                card7_title: "Ekspansi Memori & SWAP",
+                card7_badge: "Hardware Engine",
+                card7_desc: "Konfigurasi langsung perangkat keras dan modul kernel Jacktor Audio Framework.",
+                setting_orientation: "Orientasi Layar",
+                btn_landscape: "Landscape (1)",
+                btn_portrait: "Portrait (0)",
+                btn_reverse_land: "Terbalik (3)",
+                setting_res_density: "Resolusi & Kerapatan Layar",
+                btn_stock_display: "Bawaan",
+                setting_stayon: "Layar Selalu Nyala (Stay Awake)",
+                btn_always_on: "Selalu Nyala (24/7)",
+                btn_std_timeout: "Normal (30s)",
+                setting_lockscreen: "Keamanan Kunci Layar",
+                btn_lock_disabled: "Langsung Nyala (Tanpa Kunci)",
+                btn_lock_enabled: "Aktif",
+                setting_battery_bypass: "Bypass Baterai 24/7",
+                btn_bypass_on: "Bypass 100%",
+                btn_bypass_off: "Standar",
+                setting_cpu_governor: "Profil Performa CPU",
+                btn_cpu_perf: "Performa Maksimal",
+                btn_cpu_balanced: "Seimbang",
+                setting_resampler_mode: "Mode Resampler Audio",
+                btn_resampler_match: "Match Source",
+                btn_resampler_highest: "Tertinggi",
+                stat_resampler_mode: "Mode Resampler",
+                setting_system_services: "Manajemen Layanan",
+                btn_restart_adb: "Restart ADB",
+                stat_digital_gain: "Digital Gain DSP Perangkat Keras",
+                btn_gain_stock: "Standar (0 dB)",
+                btn_gain_boost: "+3 dB",
+                btn_gain_loud: "+6 dB",
+                btn_gain_max: "+10 dB",
+                setting_swap_title: "Ekspansi RAM Virtual & SWAP",
+                btn_swap_off: "Nonaktif (0 MB)",
+                btn_swap_3gb: "3 GB (Rekomendasi)",
+                desc_swap_info: "Swapfile 3 GB pada penyimpanan internal dipadukan dengan zRAM mencegah penutupan paksa aplikasi musik & navigasi di latar belakang.",
+                
+                card8_title: "Server OpenSSH & Akses Jarak Jauh",
+                ssh_service_ctrl: "Kontrol Layanan",
+                btn_start: "Mulai",
+                btn_stop: "Hentikan",
+                btn_restart: "Restart",
+                ssh_autostart_label: "Mulai Otomatis Saat Boot",
+                btn_enabled: "Aktif",
+                btn_disabled: "Nonaktif",
+                ssh_port_label: "Port Listening SSH",
+                btn_save_port: "Terapkan Port",
+                ssh_cmd_guide: "Koneksi Terminal Cepat (Root / Shell)",
+                btn_copy: "Salin",
+                tab_ssh_keys: "Kunci Otentikasi (Keys)",
+                tab_ssh_config: "Konfigurasi (sshd_config)",
+                tab_ssh_logs: "Log Server",
+                tab_ssh_password: "Kata Sandi & Otentikasi",
+                btn_refresh_keys: "Segarkan Kunci",
+                add_key_title: "Tambah Kunci Publik Baru (Tempel ~/.ssh/id_ed25519.pub / id_rsa.pub)",
+                btn_add_key: "Tambahkan Kunci",
+                config_desc: "Edit langsung /data/adb/ssh/sshd_config (Otomatis restart server saat disimpan)",
+                btn_reload: "Muat Ulang",
+                btn_save: "Simpan Konfig",
+                log_desc: "Aktivitas server terbaru dari /data/adb/ssh/sshd.log",
+                btn_clear_log: "Bersihkan Log",
+                no_keys_found: "Belum ada kunci otentikasi yang tersimpan untuk pengguna ini.",
+
+                // SSH Password & Auth
+                pwd_sync_title: "Sinkronisasi Kata Sandi (Webroot & SSH)",
+                pwd_sync_desc: "Mengubah kata sandi di sini langsung memperbarui login dashboard Webroot dan kata sandi server OpenSSH untuk user root.",
+                pwd_current_label: "Kata Sandi Saat Ini",
+                pwd_new_label: "Kata Sandi Baru",
+                pwd_confirm_label: "Konfirmasi Kata Sandi Baru",
+                pwd_btn_save: "Perbarui & Sinkronkan Kata Sandi",
+                pwd_err_match: "Konfirmasi kata sandi baru tidak cocok!",
+                pwd_err_len: "Kata sandi baru minimal 4 karakter!",
+                pwd_updating: "Memperbarui kata sandi...",
+                pwd_success: "Kata sandi berhasil diperbarui untuk Webroot dan SSH!",
+
+                // Auth & Login
+                btn_logout: "Logout",
+                session_active_label: "Sesi Aktif: Masuk sebagai",
+                session_logout_desc: "Mengakhiri sesi browser aktif dan kembali ke laman login.",
+                footer_auth_info: "Jacktor Audio Framework • Terotentikasi sebagai root",
+                login_title: "Masuk ke Dashboard Jacktor",
+                login_desc: "Masukkan kredensial sistem untuk mengakses DSP audio & pengaturan hardware",
+                login_err_invalid: "Nama pengguna atau kata sandi salah. Bawaan: root / admin123",
+                login_user_label: "Nama Pengguna",
+                login_pass_label: "Kata Sandi",
+                login_remember: "Ingat sesi di perangkat ini",
+                login_btn: "Masuk ke Sistem",
+                login_logging_in: "Sedang masuk...",
+                
+                terminal_title: "Terminal Diagnostik",
+                terminal_badge: "Hak Akses Root",
+                btn_execute: "Jalankan",
+                
+                // Telemetry strings
+                vbus_active: "VBUS Aktif",
+                vbus_idle: "Host Siaga - Diam",
+                vbus_off: "Mati",
+                cable_plugged: "Terhubung / Aktif",
+                cable_disconnected: "Terlepas",
+                usb_no_devices: "Tidak ada perangkat USB eksternal yang terdeteksi."
+            }
+        };
+
+        const urlParams = new URLSearchParams(window.location.search);
+        let currentLang = urlParams.get('lang') || localStorage.getItem('jacktor_lang') || 'en';
+
+        function toggleLanguage() {
+            currentLang = currentLang === 'en' ? 'id' : 'en';
+            localStorage.setItem('jacktor_lang', currentLang);
+            applyLanguage(currentLang);
+            showToast(currentLang === 'id' ? 'Bahasa dialihkan ke Bahasa Indonesia' : 'Language switched to English', 'success', 2000);
+        }
+
+        function applyLanguage(lang) {
+            const dict = i18n[lang] || i18n.en;
+            const langLabel = document.getElementById('lang-label');
+            if (langLabel) langLabel.innerText = lang.toUpperCase();
+            const loginLangLabel = document.getElementById('login-lang-label');
+            if (loginLangLabel) loginLangLabel.innerText = lang.toUpperCase();
+
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.dataset.i18n;
+                if (dict[key]) {
+                    el.innerText = dict[key];
+                }
+            });
+
+            const cmdIn = document.getElementById('cmd-input');
+            if (cmdIn) {
+                cmdIn.placeholder = lang === 'id' 
+                    ? 'Ketik perintah (contoh: lsusb, amp-status, tinymix)...'
+                    : 'Type command (e.g. lsusb, amp-status, tinymix)...';
+            }
+
+            if (window.lastStatusData) {
+                renderTelemetry(window.lastStatusData);
+            }
+        }
+
+        // --- SESSION & AUTHENTICATION MANAGER ---
+        function getSessionToken() {
+            return sessionStorage.getItem('jacktor_token') || localStorage.getItem('jacktor_token') || '';
+        }
+
+        function setSessionToken(token, remember) {
+            sessionStorage.setItem('jacktor_token', token);
+            if (remember) {
+                localStorage.setItem('jacktor_token', token);
+            } else {
+                localStorage.removeItem('jacktor_token');
+            }
+        }
+
+        function clearSessionToken() {
+            sessionStorage.removeItem('jacktor_token');
+            localStorage.removeItem('jacktor_token');
+        }
+
+        function togglePasswordVisibility(inputId, btn) {
+            const el = document.getElementById(inputId);
+            if (!el) return;
+            if (el.type === 'password') {
+                el.type = 'text';
+                if (btn) btn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+            } else {
+                el.type = 'password';
+                if (btn) btn.innerHTML = '<i class="fa-solid fa-eye"></i>';
+            }
+        }
+
+        let pollTimer = null;
+        function startPolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            fetchStatus();
+            loadSshKeys();
+            pollTimer = setInterval(fetchStatus, 1000);
+        }
+
+        function stopPolling() {
+            if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+        }
+
+        async function manualRefresh() {
+            const isId = (currentLang === 'id');
+            showToast(isId ? 'Memperbarui data realtime...' : 'Refreshing realtime telemetry...', 'loading');
+            await fetchStatus();
+            showToast(isId ? 'Data berhasil diperbarui' : 'Data updated successfully', 'success', 1500);
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopPolling();
+            } else {
+                startPolling();
+            }
+        });
+
+        function onAuthRequired() {
+            stopPolling();
+            clearSessionToken();
+            window.location.replace('/login.html');
+        }
+
+        async function initAuth() {
+            const urlToken = urlParams.get('token');
+            if (urlToken) {
+                setSessionToken(urlToken, true);
+            }
+            const token = getSessionToken();
+            if (!token) {
+                window.location.replace('/login.html');
+                return;
+            }
+
+            try {
+                const res = await fetch(`/cgi-bin/api.sh?action=auth_check&token=${encodeURIComponent(token)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.authenticated) {
+                        const tabParam = urlParams.get('tab');
+                        if (tabParam) switchSshTab(tabParam);
+                        startPolling();
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.warn("auth_check network warning:", e);
+                startPolling();
+                return;
+            }
+
+            // Fallback: token invalid or expired
+            clearSessionToken();
+            window.location.replace('/login.html');
+        }
+
+        async function handleLogout() {
+            try {
+                const token = getSessionToken();
+                await fetch(`/cgi-bin/api.sh?action=auth_logout&token=${encodeURIComponent(token)}`);
+            } catch (e) {}
+            clearSessionToken();
+            stopPolling();
+            window.location.replace('/login.html');
+        }
+
+        async function submitChangePassword(event) {
+            if (event) event.preventDefault();
+            const currInput = document.getElementById('input-curr-pwd');
+            const newInput = document.getElementById('input-new-pwd');
+            const confInput = document.getElementById('input-confirm-pwd');
+            const btn = document.getElementById('btn-save-pwd');
+
+            const currPass = currInput ? currInput.value : '';
+            const newPass = newInput ? newInput.value : '';
+            const confPass = confInput ? confInput.value : '';
+
+            const dict = i18n[currentLang] || i18n.en;
+
+            if (newPass !== confPass) {
+                showToast(dict.pwd_err_match);
+                return;
+            }
+            if (newPass.length < 4) {
+                showToast(dict.pwd_err_len);
+                return;
+            }
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>${dict.pwd_updating}</span>`;
+            }
+
+            try {
+                const token = getSessionToken();
+                const bodyData = `action=auth_change_password&token=${encodeURIComponent(token)}&pass=${encodeURIComponent(currPass)}&new_pass=${encodeURIComponent(newPass)}`;
+                let res = null;
+                try {
+                    const resp = await fetch('/cgi-bin/api.sh', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: bodyData
+                    });
+                    if (resp.ok) res = await resp.json();
+                } catch (e1) {
+                    const resp = await fetch(`/cgi-bin/api.sh?${bodyData}`);
+                    if (resp.ok) res = await resp.json();
+                }
+
+                if (res && res.success) {
+                    if (res.token) {
+                        setSessionToken(res.token, true);
+                    }
+                    showToast(dict.pwd_success);
+                    if (currInput) currInput.value = '';
+                    if (newInput) newInput.value = '';
+                    if (confInput) confInput.value = '';
+                } else {
+                    showToast(res && res.error ? res.error : "Failed to change password");
+                }
+            } catch (err) {
+                showToast("Error: " + err.message);
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> <span data-i18n="pwd_btn_save">${dict.pwd_btn_save}</span>`;
+                }
+            }
+        }
+
+        let toastTimer = null;
+        function showToast(msg, type = 'info', duration = 3000) {
+            const t = document.getElementById('toast');
+            if (!t) return;
+            if (toastTimer) clearTimeout(toastTimer);
+
+            let icon = '<i class="fa-solid fa-circle-info" style="color: var(--accent-cyan); font-size: 1.1rem;"></i>';
+            let borderColor = 'var(--accent-cyan)';
+
+            if (type === 'loading') {
+                icon = '<i class="fa-solid fa-spinner fa-spin" style="color: var(--accent-cyan); font-size: 1.1rem;"></i>';
+                borderColor = 'var(--accent-cyan)';
+            } else if (type === 'success') {
+                icon = '<i class="fa-solid fa-circle-check" style="color: var(--accent-green); font-size: 1.1rem;"></i>';
+                borderColor = 'var(--accent-green)';
+            } else if (type === 'error') {
+                icon = '<i class="fa-solid fa-circle-exclamation" style="color: #ef4444; font-size: 1.1rem;"></i>';
+                borderColor = '#ef4444';
+            } else if (type === 'warning') {
+                icon = '<i class="fa-solid fa-triangle-exclamation" style="color: #f59e0b; font-size: 1.1rem;"></i>';
+                borderColor = '#f59e0b';
+            }
+
+            t.innerHTML = `<div style="display: flex; align-items: center; gap: 10px;">${icon}<span>${msg}</span></div>`;
+            t.style.borderColor = borderColor;
+            t.style.display = 'block';
+
+            if (duration > 0) {
+                toastTimer = setTimeout(() => {
+                    t.style.display = 'none';
+                }, duration);
+            }
+        }
+
+        async function getApiData(actionParams) {
+            const token = getSessionToken();
+            const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+
+            if (window.ksu && typeof window.ksu.exec === 'function') {
+                try {
+                    let cmd = `/data/adb/modules/jacktor-audio-framework/webroot/cgi-bin/api.sh ${actionParams.replace(/&/g, ' ')} token=${token}`;
+                    const res = await window.ksu.exec(cmd);
+                    return JSON.parse(res);
+                } catch (e) {
+                    console.warn("ksu.exec error:", e);
+                }
+            }
+
+            try {
+                const res = await fetch(`/cgi-bin/api.sh?action=${actionParams}${tokenParam}`, {
+                    headers: { 'X-Jacktor-Token': token }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.authenticated === false) {
+                        onAuthRequired();
+                        return null;
+                    }
+                    return data;
+                }
+            } catch (e) {
+                try {
+                    const res = await fetch(`http://127.0.0.1/cgi-bin/api.sh?action=${actionParams}${tokenParam}`, {
+                        headers: { 'X-Jacktor-Token': token }
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data && data.authenticated === false) {
+                            onAuthRequired();
+                            return null;
+                        }
+                        return data;
+                    }
+                } catch (e2) {
+                    console.warn("Fetch fallback error:", e2);
+                }
+            }
+            return null;
+        }
+
+        async function setUsbMode(mode) {
+            const isId = (currentLang === 'id');
+            showToast(isId ? `Mengalihkan ke Mode ${mode.toUpperCase()}...` : `Switching to ${mode.toUpperCase()} Mode...`, 'loading');
+            updateUsbButtons(mode);
+            try {
+                const res = await getApiData(`otg_mode&mode=${mode}`);
+                showToast(res && res.message ? res.message : (isId ? `Mode ${mode.toUpperCase()} Aktif` : `${mode.toUpperCase()} Mode Active`), 'success', 2500);
+                await fetchStatus();
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        function updateUsbButtons(targetMode) {
+            const hostBtn = document.getElementById('btn-mode-host');
+            const devBtn = document.getElementById('btn-mode-device');
+            const autoBtn = document.getElementById('btn-mode-auto');
+            if (hostBtn) hostBtn.classList.toggle('active', targetMode === 'host');
+            if (devBtn) devBtn.classList.toggle('active', targetMode === 'device' || targetMode === 'peripheral' || targetMode === 'gadget');
+            if (autoBtn) autoBtn.classList.toggle('active', targetMode === 'auto');
+        }
+
+        async function applyTweak(tweak, val) {
+            let label = tweak;
+            const isId = (currentLang === 'id');
+            if (tweak === 'resampler_mode') {
+                label = val === 'match_source' ? (isId ? 'Mode Resampler: Match Source (Bit-Perfect)' : 'Resampler Mode: Match Source (Bit-Perfect)') : (isId ? 'Mode Resampler: Tertinggi (384 kHz)' : 'Resampler Mode: Highest (384 kHz)');
+            } else if (tweak === 'cpu_profile') {
+                label = val === 'perf' ? (isId ? 'Profil CPU: Performa Maksimal' : 'CPU Profile: Max Performance') : (isId ? 'Profil CPU: Seimbang' : 'CPU Profile: Balanced');
+            } else if (tweak === 'bypass') {
+                label = val === 'true' ? (isId ? 'Bypass Baterai: Aktif (AC Direct)' : 'Battery Bypass: Enabled') : (isId ? 'Bypass Baterai: Standar' : 'Battery Bypass: Standard');
+            } else if (tweak === 'rotation') {
+                label = isId ? `Rotasi Layar: ${val === 1 ? 'Landscape' : (val === 0 ? 'Portrait' : 'Reverse')}` : `Display Rotation: ${val === 1 ? 'Landscape' : (val === 0 ? 'Portrait' : 'Reverse')}`;
+            } else if (tweak === 'resolution') {
+                label = isId ? `Resolusi Layar: ${val}` : `Display Resolution: ${val}`;
+            } else if (tweak === 'density') {
+                label = isId ? `Density Layar: ${val} DPI` : `Display Density: ${val} DPI`;
+            } else if (tweak === 'stayon') {
+                label = isId ? `Layar Tetap Menyala: ${val ? 'Aktif' : 'Nonaktif'}` : `Screen Stay-On: ${val ? 'Enabled' : 'Disabled'}`;
+            } else if (tweak === 'lockscreen') {
+                label = isId ? `Kunci Layar: ${val ? 'Dinonaktifkan' : 'Diaktifkan'}` : `Lockscreen: ${val ? 'Disabled' : 'Enabled'}`;
+            }
+
+            showToast(isId ? `Menerapkan ${label}...` : `Applying ${label}...`, 'loading');
+
+            const fb = document.getElementById('tweak-feedback');
+            if (fb) {
+                fb.style.display = 'block';
+                fb.style.color = 'var(--accent-cyan)';
+                fb.innerText = isId ? 'Menerapkan konfigurasi...' : 'Applying setting...';
+            }
+            try {
+                const res = await getApiData(`apply_tweak&tweak=${encodeURIComponent(tweak)}&val=${encodeURIComponent(val)}`);
+                const msg = res && res.message ? res.message : (isId ? `${label} berhasil diterapkan` : `${label} applied successfully`);
+                showToast(msg, 'success', 2500);
+                if (fb) {
+                    fb.style.color = '#4ade80';
+                    fb.innerText = msg;
+                    setTimeout(() => { fb.style.display = 'none'; }, 3000);
+                }
+                await fetchStatus();
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+                if (fb) {
+                    fb.style.color = '#ef4444';
+                    fb.innerText = 'Error: ' + err.message;
+                }
+            }
+        }
+
+        function updateTweakButtons(tw, data) {
+            if (!tw) return;
+            // Rotation
+            const rot = parseInt(tw.rotation);
+            document.getElementById('tw-rot-1')?.classList.toggle('active', rot === 1);
+            document.getElementById('tw-rot-0')?.classList.toggle('active', rot === 0);
+            document.getElementById('tw-rot-3')?.classList.toggle('active', rot === 3);
+
+            // Resolution
+            const isCustomRes = tw.resolution === '720x1460';
+            document.getElementById('tw-res-custom')?.classList.toggle('active', isCustomRes);
+            document.getElementById('tw-res-reset')?.classList.toggle('active', !isCustomRes);
+
+            // Density
+            const isCustomDen = tw.density === 256 || tw.density === '256';
+            document.getElementById('tw-den-custom')?.classList.toggle('active', isCustomDen);
+
+            // Stayon
+            const isStay = tw.stayon === 1 || tw.stayon === true;
+            document.getElementById('tw-stay-1')?.classList.toggle('active', isStay);
+            document.getElementById('tw-stay-0')?.classList.toggle('active', !isStay);
+
+            // Lockscreen
+            const isLockDis = tw.lockscreen_disabled === 1 || tw.lockscreen_disabled === true;
+            document.getElementById('tw-lock-1')?.classList.toggle('active', isLockDis);
+            document.getElementById('tw-lock-0')?.classList.toggle('active', !isLockDis);
+
+            // Battery Bypass
+            const isBypass = data && data.battery && (data.battery.status?.includes('Bypass') || data.battery.status?.includes('AC'));
+            document.getElementById('tw-bypass-1')?.classList.toggle('active', !!isBypass);
+            document.getElementById('tw-bypass-0')?.classList.toggle('active', !isBypass);
+
+            // CPU Profile
+            const isPerf = ((data && data.cpu && data.cpu.governor) || '').toLowerCase().includes('performance') || (data && data.cpu && data.cpu.profile === 'performance');
+            document.getElementById('tw-cpu-perf')?.classList.toggle('active', isPerf);
+            document.getElementById('tw-cpu-balanced')?.classList.toggle('active', !isPerf);
+            const cpuBadge = document.getElementById('badge-cpu-status');
+            if (cpuBadge) {
+                if (isPerf) {
+                    cpuBadge.innerText = (typeof currentLang !== 'undefined' && currentLang === 'en') ? 'Max Performance' : 'Performa Maksimal';
+                    cpuBadge.className = 'badge active';
+                } else {
+                    cpuBadge.innerText = (typeof currentLang !== 'undefined' && currentLang === 'en') ? 'Balanced' : 'Seimbang';
+                    cpuBadge.className = 'badge';
+                }
+            }
+
+            // Audio Resampler Mode
+            const isMatchSource = data && data.resampler && data.resampler.mode === 'match_source';
+            document.getElementById('tw-resampler-match')?.classList.toggle('active', !!isMatchSource);
+            document.getElementById('tw-resampler-highest')?.classList.toggle('active', !isMatchSource);
+            const resEl = document.getElementById('stat-resampler-mode');
+            if (resEl) {
+                if (isMatchSource) {
+                    resEl.innerText = (typeof currentLang !== 'undefined' && currentLang === 'en') ? 'Match Source (Bit-Perfect)' : 'Match Source (Bit-Perfect)';
+                    resEl.className = 'stat-val val-green';
+                } else {
+                    resEl.innerText = (typeof currentLang !== 'undefined' && currentLang === 'en') ? 'Tertinggi (384 kHz)' : 'Tertinggi (384 kHz)';
+                    resEl.className = 'stat-val val-cyan';
+                }
+            }
+
+            // SWAP Status and Buttons
+            if (data && data.swap) {
+                const swapCfg = parseInt(data.swap.config_mb) || 0;
+                [0, 2048, 3072, 4096].forEach(sz => {
+                    document.getElementById(`tw-swap-${sz}`)?.classList.toggle('active', swapCfg === sz);
+                });
+                const sTotal = (data.swap.total_mb / 1024).toFixed(1);
+                const sUsed = (data.swap.used_mb / 1024).toFixed(1);
+                const statSwapEl = document.getElementById('stat-swap-text');
+                if (statSwapEl) {
+                    statSwapEl.innerText = `${sUsed} GB / ${sTotal} GB (${data.swap.file_active ? 'Active' : 'zRAM'})`;
+                }
+            }
+
+            // Audio Gain
+            if (data && data.audio_gain) {
+                const dig = parseInt(data.audio_gain.digital) || 84;
+                const gainSlider = document.getElementById('gain-slider');
+                if (gainSlider && document.activeElement !== gainSlider && !isGainUpdating && targetGain === null) {
+                    gainSlider.value = dig;
+                }
+                const dB = ((dig - 84) * 0.5).toFixed(1);
+                const sign = parseFloat(dB) > 0 ? '+' : '';
+                const gainLabel = document.getElementById('gain-digital-label');
+                if (gainLabel) {
+                    gainLabel.innerText = `${sign}${dB} dB (${dig})`;
+                }
+                [84, 90, 96, 104].forEach(g => {
+                    document.getElementById(`tw-gain-${g}`)?.classList.toggle('active', dig === g);
+                });
+            }
+        }
+
+        let targetGain = null;
+        let isGainUpdating = false;
+
+        function updateGainPreview(val) {
+            const dig = parseInt(val, 10);
+            const dB = ((dig - 84) * 0.5).toFixed(1);
+            const sign = parseFloat(dB) > 0 ? '+' : '';
+            const gainLabel = document.getElementById('gain-digital-label');
+            if (gainLabel) {
+                gainLabel.innerText = `${sign}${dB} dB (${dig})`;
+            }
+            [84, 90, 96, 104].forEach(g => {
+                document.getElementById(`tw-gain-${g}`)?.classList.toggle('active', dig === g);
+            });
+        }
+
+        function handleGainInput(val) {
+            const intVal = parseInt(val, 10);
+            updateGainPreview(intVal);
+            targetGain = intVal;
+            if (!isGainUpdating) {
+                processGainQueue();
+            }
+        }
+
+        function handleGainChange(val) {
+            handleGainInput(val);
+        }
+
+        async function processGainQueue() {
+            if (targetGain === null) {
+                isGainUpdating = false;
+                return;
+            }
+
+            isGainUpdating = true;
+            while (targetGain !== null) {
+                const valToSend = targetGain;
+                targetGain = null;
+                try {
+                    await getApiData(`set_gain&val=${valToSend}`);
+                } catch (e) {
+                    console.error("Gain sync failed:", e);
+                }
+            }
+            isGainUpdating = false;
+        }
+
+        async function changeGain(type, val) {
+            handleGainInput(val);
+        }
+
+        async function applyGainPreset(preset) {
+            const isId = (currentLang === 'id');
+            const pName = preset === 'preset_stock' ? 'Stock (0 dB)' : (preset === 'preset_boost' ? 'Boost (+3 dB)' : (preset === 'preset_loud' ? 'Loud (+6 dB)' : 'Max (+10 dB)'));
+            showToast(isId ? `Menerapkan Preset Gain ${pName}...` : `Applying Gain Preset ${pName}...`, 'loading');
+            try {
+                const res = await getApiData(`set_gain&mode=${preset}`);
+                showToast(res && res.message ? res.message : (isId ? `Preset Gain ${pName} aktif` : `Gain Preset ${pName} active`), 'success', 2500);
+                setTimeout(fetchStatus, 300);
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        async function applySwapTweak(mb) {
+            const isId = (currentLang === 'id');
+            showToast(isId ? `Mengatur SWAP ${mb} MB (Mohon tunggu)...` : `Configuring SWAP ${mb} MB (Please wait)...`, 'loading');
+            const btn = document.getElementById(`tw-swap-${mb}`);
+            const origHtml = btn ? btn.innerHTML : '';
+            if (btn) btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ...';
+            try {
+                const res = await getApiData(`apply_tweak&tweak=swap&val=${mb}`);
+                showToast(res && res.message ? res.message : (isId ? `SWAP ${mb} MB berhasil dikonfigurasi` : `SWAP ${mb} MB configured successfully`), 'success', 3000);
+            } catch (e) {
+                showToast("SWAP Error: " + e.message, 'error', 4000);
+            } finally {
+                if (btn) btn.innerHTML = origHtml;
+                setTimeout(fetchStatus, 1000);
+            }
+        }
+
+        async function restartAudio() {
+            const isId = (currentLang === 'id');
+            showToast(isId ? "Memuat ulang AudioServer..." : "Restarting AudioServer...", 'loading');
+            try {
+                const res = await getApiData('restart_audio');
+                showToast(res && res.message ? res.message : (isId ? "AudioServer berhasil dimuat ulang" : "AudioServer restarted successfully"), 'success', 3000);
+                setTimeout(fetchStatus, 1000);
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        let isVolumeSending = false;
+        let pendingVolume = null;
+        let lastVolumeInteraction = 0;
+
+        function updateVolumePreview(val) {
+            const slider = document.getElementById('vol-slider');
+            const vMax = slider ? slider.max || 25 : 25;
+            const lbl = document.getElementById('vol-label');
+            if (lbl) lbl.innerText = `${val} / ${vMax}`;
+        }
+
+        function handleVolumeInput(val) {
+            const intVal = parseInt(val, 10);
+            lastVolumeInteraction = Date.now();
+            updateVolumePreview(intVal);
+            pendingVolume = intVal;
+            dispatchVolume();
+        }
+
+        function handleVolumeChange(val) {
+            const intVal = parseInt(val, 10);
+            lastVolumeInteraction = Date.now();
+            updateVolumePreview(intVal);
+            pendingVolume = intVal;
+            dispatchVolume();
+        }
+
+        async function dispatchVolume() {
+            if (isVolumeSending) return;
+            if (pendingVolume === null) return;
+
+            isVolumeSending = true;
+            while (pendingVolume !== null) {
+                const toSend = pendingVolume;
+                pendingVolume = null;
+                try {
+                    await getApiData(`set_volume&val=${toSend}`);
+                } catch (e) {
+                    console.error("Volume set failed:", e);
+                }
+            }
+            isVolumeSending = false;
+        }
+
+        async function changeVolume(val) {
+            handleVolumeChange(val);
+        }
+
+        function updateMarquee(el, box, animId) {
+            if (!el || !box) return;
+            requestAnimationFrame(() => {
+                const textW = el.scrollWidth;
+                const boxW = box.clientWidth;
+
+                if (el.dataset.textW == textW && el.dataset.boxW == boxW) return;
+                el.dataset.textW = textW;
+                el.dataset.boxW = boxW;
+
+                let styleEl = document.getElementById(`style-${animId}`);
+                if (!styleEl) {
+                    styleEl = document.createElement('style');
+                    styleEl.id = `style-${animId}`;
+                    document.head.appendChild(styleEl);
+                }
+
+                if (textW > boxW) {
+                    box.classList.add('has-overflow');
+                    const scrollDist = textW - boxW + 24;
+                    const duration = Math.max(5, scrollDist / 20);
+
+                    styleEl.textContent = `
+                        @keyframes kf-${animId} {
+                            0%, 12% { transform: translateX(0px); }
+                            50%, 65% { transform: translateX(-${scrollDist}px); }
+                            90%, 100% { transform: translateX(0px); }
+                        }
+                    `;
+                    void el.offsetWidth;
+                    el.style.animation = `kf-${animId} ${duration}s ease-in-out infinite`;
+                } else {
+                    box.classList.remove('has-overflow');
+                    styleEl.textContent = '';
+                    el.style.animation = 'none';
+                    el.style.transform = 'none';
+                }
+            });
+        }
+
+        let isFetchingStatus = false;
+        async function fetchStatus() {
+            if (isFetchingStatus) return;
+            isFetchingStatus = true;
+            try {
+                const data = await getApiData('status');
+                if (!data || !data.success) return;
+                window.lastStatusData = data;
+                renderTelemetry(data);
+            } catch (err) {
+                console.error("fetchStatus error:", err);
+            } finally {
+                isFetchingStatus = false;
+            }
+        }
+
+        function getUsbDeviceInfo(dev, lang) {
+            const type = (dev.type || '').toLowerCase();
+            const prod = (dev.prod || '').toLowerCase();
+            const mfr = (dev.mfr || '').toLowerCase();
+            const text = `${type} ${prod} ${mfr}`;
+            const isId = lang === 'id';
+
+            // 1. Mouse
+            if (type === 'mouse' || text.includes('mouse') || text.includes('trackball')) {
+                return {
+                    icon: 'fa-solid fa-computer-mouse',
+                    color: '#38bdf8',
+                    badge: isId ? 'Mouse' : 'Mouse',
+                    badgeBg: 'rgba(56, 189, 248, 0.12)'
+                };
+            }
+            // 2. Keyboard
+            if (type === 'keyboard' || text.includes('keyboard') || text.includes('keypad')) {
+                return {
+                    icon: 'fa-solid fa-keyboard',
+                    color: '#a78bfa',
+                    badge: isId ? 'Keyboard' : 'Keyboard',
+                    badgeBg: 'rgba(167, 139, 250, 0.12)'
+                };
+            }
+            // 3. Camera / Webcam
+            if (type === 'camera' || text.includes('camera') || text.includes('webcam') || text.includes('uvc') || text.includes('video')) {
+                return {
+                    icon: 'fa-solid fa-video',
+                    color: '#f43f5e',
+                    badge: isId ? 'Kamera' : 'Camera',
+                    badgeBg: 'rgba(244, 63, 94, 0.12)'
+                };
+            }
+            // 4. DVD / CD / Optical Drive
+            if (type === 'dvd' || text.includes('dvd') || text.includes('cd-rom') || text.includes('cdrom') || text.includes('optical') || text.includes('bluray') || text.includes('bd-rom')) {
+                return {
+                    icon: 'fa-solid fa-compact-disc',
+                    color: '#fbbf24',
+                    badge: isId ? 'Drive Optik (DVD/CD)' : 'Optical Drive (DVD/CD)',
+                    badgeBg: 'rgba(251, 191, 36, 0.12)'
+                };
+            }
+            // 5. Storage / Flashdisk / External Drive
+            if (type === 'storage' || text.includes('storage') || text.includes('flash') || text.includes('drive') || text.includes('disk') || text.includes('cruzer') || text.includes('sandisk') || text.includes('kingston') || text.includes('transcend') || text.includes('sdcard')) {
+                return {
+                    icon: 'fa-solid fa-hard-drive',
+                    color: '#34d399',
+                    badge: isId ? 'Penyimpanan (Storage)' : 'Mass Storage',
+                    badgeBg: 'rgba(52, 211, 153, 0.12)'
+                };
+            }
+            // 6. MTP / Smartphone / Mobile Device
+            if (type === 'mtp' || text.includes('mtp') || text.includes('phone') || text.includes('android') || text.includes('iphone') || text.includes('ipad') || text.includes('mobile')) {
+                return {
+                    icon: 'fa-solid fa-mobile-screen',
+                    color: '#60a5fa',
+                    badge: isId ? 'Perangkat Ponsel (MTP)' : 'Mobile Phone (MTP)',
+                    badgeBg: 'rgba(96, 165, 250, 0.12)'
+                };
+            }
+            // 7. USB Hub
+            if (type === 'hub' || text.includes('hub')) {
+                return {
+                    icon: 'fa-solid fa-network-wired',
+                    color: '#818cf8',
+                    badge: isId ? 'USB Hub' : 'USB Hub',
+                    badgeBg: 'rgba(129, 140, 248, 0.12)'
+                };
+            }
+            // 8. LAN / Ethernet Adapter
+            if (type === 'lan' || text.includes('ethernet') || text.includes('lan') || text.includes('rndis') || text.includes('rtl815') || text.includes('ax88') || text.includes('network')) {
+                return {
+                    icon: 'fa-solid fa-ethernet',
+                    color: '#2dd4bf',
+                    badge: isId ? 'Ethernet LAN' : 'Ethernet LAN',
+                    badgeBg: 'rgba(45, 212, 191, 0.12)'
+                };
+            }
+            // 9. Wi-Fi Wireless Adapter
+            if (type === 'wifi' || text.includes('wifi') || text.includes('wi-fi') || text.includes('wireless') || text.includes('wlan') || text.includes('802.11')) {
+                return {
+                    icon: 'fa-solid fa-wifi',
+                    color: '#38bdf8',
+                    badge: isId ? 'Adaptor Wi-Fi' : 'Wi-Fi Adapter',
+                    badgeBg: 'rgba(56, 189, 248, 0.12)'
+                };
+            }
+            // 10. Audio DAC / Sound Device / Headset
+            if (type === 'audio' || text.includes('audio') || text.includes('dac') || text.includes('sound') || text.includes('headset') || text.includes('headphone') || text.includes('speaker') || text.includes('pcm') || text.includes('codec')) {
+                return {
+                    icon: 'fa-solid fa-headphones',
+                    color: '#4ade80',
+                    badge: isId ? 'Audio DAC' : 'Audio DAC',
+                    badgeBg: 'rgba(74, 222, 128, 0.12)'
+                };
+            }
+            // 11. Serial / UART Bridge
+            if (type === 'serial' || text.includes('serial') || text.includes('uart') || text.includes('cp210') || text.includes('ch34') || text.includes('ftdi') || text.includes('pl2303') || text.includes('bridge')) {
+                return {
+                    icon: 'fa-solid fa-terminal',
+                    color: '#f59e0b',
+                    badge: isId ? 'Serial UART' : 'Serial UART',
+                    badgeBg: 'rgba(245, 158, 11, 0.12)'
+                };
+            }
+            // 12. Gamepad / Game Controller
+            if (type === 'gamepad' || text.includes('gamepad') || text.includes('joystick') || text.includes('controller') || text.includes('xbox') || text.includes('playstation') || text.includes('dualshock')) {
+                return {
+                    icon: 'fa-solid fa-gamepad',
+                    color: '#ec4899',
+                    badge: isId ? 'Gamepad' : 'Gamepad',
+                    badgeBg: 'rgba(236, 72, 153, 0.12)'
+                };
+            }
+            // 13. Printer
+            if (type === 'printer' || text.includes('printer') || text.includes('print')) {
+                return {
+                    icon: 'fa-solid fa-print',
+                    color: '#94a3b8',
+                    badge: isId ? 'Printer' : 'Printer',
+                    badgeBg: 'rgba(148, 163, 184, 0.12)'
+                };
+            }
+            // 14. Bluetooth Dongle
+            if (type === 'bluetooth' || text.includes('bluetooth') || text.includes('bt dongle')) {
+                return {
+                    icon: 'fa-brands fa-bluetooth',
+                    color: '#3b82f6',
+                    badge: isId ? 'Bluetooth' : 'Bluetooth',
+                    badgeBg: 'rgba(59, 130, 246, 0.12)'
+                };
+            }
+
+            // Default: Generic Unknown USB Device -> Standard USB Icon
+            return {
+                icon: 'fa-brands fa-usb',
+                color: '#94a3b8',
+                badge: isId ? 'USB Standar' : 'Standard USB',
+                badgeBg: 'rgba(148, 163, 184, 0.12)'
+            };
+        }
+
+        function renderTelemetry(data) {
+            const lang = currentLang;
+            const dict = i18n[lang] || i18n.en;
+
+            // 1. Header & IP / ADB Button Glowing Green
+            const ip = (data.ip || '').trim();
+            const badgeIp = document.getElementById('badge-ip');
+            if (badgeIp) {
+                if (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') {
+                    badgeIp.innerHTML = `<i class="fa-solid fa-network-wired"></i> ADB: ${ip}:5555`;
+                    badgeIp.className = 'badge active-green';
+                } else {
+                    badgeIp.innerHTML = `<i class="fa-solid fa-network-wired"></i> ADB: Offline`;
+                    badgeIp.className = 'badge';
+                }
+            }
+
+            const statIpPort = document.getElementById('stat-ip-port');
+            if (statIpPort) {
+                statIpPort.innerText = ip ? `${ip}:5555 (Remote ADB)` : 'Offline';
+            }
+
+            // 2. Header USB Mode Badge (USB: HOST / USB: PERIPHERAL / USB: AUTO)
+            const mode = (data.ssusb_mode || 'none').trim();
+            const badgeOtg = document.getElementById('badge-otg');
+            if (badgeOtg) {
+                badgeOtg.innerText = `USB: ${mode.toUpperCase()}`;
+                badgeOtg.className = mode === 'host' ? 'badge active' : 'badge';
+            }
+
+            const statMode = document.getElementById('stat-ssusb-mode');
+            if (statMode) statMode.innerText = mode.toUpperCase();
+
+            // USB Controller Buttons
+            const targetMode = data.usb_target_mode || (mode === 'host' ? 'host' : 'device');
+            updateUsbButtons(targetMode);
+
+            const modeLabel = document.getElementById('otg-mode-label');
+            if (modeLabel) {
+                modeLabel.innerText = mode.toUpperCase();
+                modeLabel.className = mode === 'host' ? 'stat-val val-green' : 'stat-val val-warn';
+            }
+
+            // 3. VBUS Voltage & Cable Connection Telemetry
+            const v = data.voltage_now || 0;
+            const volts = (v / 1000000).toFixed(2);
+            const isPlugged = data.otg_cable_connected === 1 || (data.usb_ext_count && data.usb_ext_count > 0);
+            
+            const vElem = document.getElementById('stat-vbus');
+            if (vElem) {
+                if (v > 4000000) {
+                    if (isPlugged) {
+                        vElem.innerText = `${volts} V (${dict.vbus_active})`;
+                        vElem.className = 'stat-val val-green';
+                    } else {
+                        vElem.innerText = `${volts} V (${dict.vbus_idle})`;
+                        vElem.className = 'stat-val val-warn';
+                    }
+                } else {
+                    vElem.innerText = `${volts} V (${dict.vbus_off})`;
+                    vElem.className = 'stat-val val-red';
+                }
+            }
+
+            const statOnline = document.getElementById('stat-otg-online');
+            if (statOnline) {
+                if (isPlugged) {
+                    const devCount = data.usb_ext_count || 0;
+                    statOnline.innerText = devCount > 0 ? `${dict.cable_plugged} (${devCount} Dev)` : dict.cable_plugged;
+                    statOnline.className = 'stat-val val-green';
+                } else {
+                    statOnline.innerText = dict.cable_disconnected;
+                    statOnline.className = 'stat-val val-red';
+                }
+            }
+
+            const statUdc = document.getElementById('stat-udc');
+            if (statUdc) statUdc.innerText = (data.udc || '').trim() || '(Unbound / Host)';
+
+            // 4. Track Telemetry & Auto-Marquee (No "null" display!)
+            const trTitle = document.getElementById('track-title');
+            const boxTitle = document.getElementById('box-track-title');
+            const trArtist = document.getElementById('track-artist');
+            const boxArtist = document.getElementById('box-track-artist');
+
+            const hasActiveSong = data.track && 
+                                  data.track.title && 
+                                  data.track.title.trim() !== '' && 
+                                  data.track.title !== 'null' && 
+                                  data.track.state !== 'Standby';
+
+            // Album Art or Headphone Icon
+            const artBox = document.getElementById('track-art-box');
+            if (artBox) {
+                if (hasActiveSong && data.track && data.track.cover) {
+                    artBox.classList.add('has-cover');
+                    const currentImg = artBox.querySelector('img');
+                    if (!currentImg || currentImg.getAttribute('src') !== data.track.cover) {
+                        artBox.innerHTML = `<img src="${data.track.cover}" alt="Cover Art" class="track-cover-img" onerror="this.onerror=null;this.parentElement.classList.remove('has-cover');this.parentElement.innerHTML='<i class=\\\'fa-solid fa-headphones\\\'></i>';">`;
+                    }
+                } else {
+                    artBox.classList.remove('has-cover');
+                    if (!artBox.querySelector('i.fa-headphones')) {
+                        artBox.innerHTML = '<i class="fa-solid fa-headphones"></i>';
+                    }
+                }
+            }
+
+            if (hasActiveSong) {
+                const newTitle = data.track.title;
+                let artistText = data.track.artist || 'Audio Engine';
+                if (data.track.album && data.track.album !== 'null') artistText += ` • ${data.track.album}`;
+                
+                if (trTitle && trTitle.innerText !== newTitle) {
+                    trTitle.innerText = newTitle;
+                }
+                updateMarquee(trTitle, boxTitle, 'title');
+
+                if (trArtist && trArtist.innerText !== artistText) {
+                    trArtist.innerText = artistText;
+                }
+                updateMarquee(trArtist, boxArtist, 'artist');
+            } else {
+                if (trTitle) {
+                    trTitle.innerText = dict.track_placeholder_title;
+                    trTitle.style.animation = 'none';
+                    trTitle.style.transform = 'none';
+                }
+                if (boxTitle) boxTitle.classList.remove('has-overflow');
+
+                if (trArtist) {
+                    trArtist.innerText = dict.track_placeholder_artist;
+                    trArtist.style.animation = 'none';
+                    trArtist.style.transform = 'none';
+                }
+                if (boxArtist) boxArtist.classList.remove('has-overflow');
+            }
+
+            const badgeTrack = document.getElementById('track-status-badge');
+            if (badgeTrack) {
+                const st = (data.track && data.track.state) || 'Standby';
+                badgeTrack.innerText = st;
+                badgeTrack.className = st === 'Playing' ? 'badge active pulse' : 'badge';
+            }
+
+            const trBit = document.getElementById('track-bit-depth');
+            if (trBit) trBit.innerText = (data.track && data.track.format) || '16-bit PCM';
+
+            const rowBrate = document.getElementById('row-track-bitrate');
+            const trBrate = document.getElementById('track-bitrate');
+            if (data.track && data.track.bitrate) {
+                if (rowBrate) rowBrate.style.display = 'flex';
+                if (trBrate) trBrate.innerText = data.track.bitrate;
+            } else if (rowBrate) {
+                rowBrate.style.display = 'none';
+            }
+
+            const trRate = document.getElementById('track-sample-rate');
+            if (trRate) trRate.innerText = (data.track && data.track.sample_rate) || '44.1 kHz';
+
+            const trApp = document.getElementById('track-app');
+            if (trApp) trApp.innerText = (data.track && data.track.app) || 'Symfonium';
+
+            const trState = document.getElementById('track-state');
+            if (trState) {
+                const st = (data.track && data.track.state) || 'Standby';
+                trState.innerText = st;
+                trState.className = st === 'Playing' ? 'stat-val val-green' : (st === 'Paused' ? 'stat-val val-warn' : 'stat-val');
+            }
+
+            // Pipeline Flow Text
+            const pSource = document.getElementById('pipe-source');
+            if (pSource) {
+                const sRate = (data.track && data.track.sample_rate) ? data.track.sample_rate.replace(' kHz', 'k') : '48k';
+                const sBit = (data.track && data.track.bit_depth) ? data.track.bit_depth.replace('-bit', 'b') : '24b';
+                pSource.innerText = `${sRate} • ${sBit}`;
+            }
+
+            const pDsp = document.getElementById('pipe-dsp');
+            if (pDsp) {
+                if (data.resampler && data.resampler.mode === 'match_source') {
+                    pDsp.innerText = 'Bit-Perfect';
+                    pDsp.className = 'pipe-val val-green';
+                } else {
+                    pDsp.innerText = '384k Upsample';
+                    pDsp.className = 'pipe-val val-cyan';
+                }
+            }
+
+            const pOut = document.getElementById('pipe-out');
+            if (pOut) {
+                const dFreq = (data.dac && data.dac.freq && data.dac.freq !== '-') ? (parseInt(data.dac.freq) / 1000) + 'k' : '96k';
+                const dBit = (data.dac && data.dac.bit_depth && data.dac.bit_depth !== '-') ? data.dac.bit_depth.replace('-bit PCM', 'b') : '24b';
+                pOut.innerText = `${dFreq} • ${dBit}`;
+            }
+
+            // 5. Hardware DAC Telemetry
+            const dacFound = data.dac && (data.dac.found === 1 || data.dac.card !== '');
+            const statDacName = document.getElementById('stat-dac-name');
+            if (statDacName) {
+                statDacName.innerText = dacFound ? data.dac.name || 'External USB DAC' : 'None Detected';
+                statDacName.className = dacFound ? 'stat-val val-green' : 'stat-val val-warn';
+            }
+
+            // Hardware Maximum DAC Capabilities
+            const statDacHwCap = document.getElementById('stat-dac-hw-cap');
+            if (statDacHwCap) {
+                statDacHwCap.innerText = (data.dac && data.dac.hw_capabilities) ? data.dac.hw_capabilities : '96 kHz • 24-bit • Stereo (2 Ch)';
+            }
+
+            const statDacRates = document.getElementById('stat-dac-rates');
+            if (statDacRates) {
+                statDacRates.innerText = (data.dac && data.dac.rates_list) ? `${data.dac.rates_list} (Hi-Res Audio)` : '8k - 96k Hz (Hi-Res Audio)';
+            }
+
+            const statDacBits = document.getElementById('stat-dac-bits');
+            if (statDacBits) {
+                statDacBits.innerText = (data.dac && data.dac.bit_depth && data.dac.bit_depth !== '-') ? data.dac.bit_depth : '24-bit PCM';
+            }
+
+            const statDacFreq = document.getElementById('stat-dac-freq');
+            if (statDacFreq) {
+                statDacFreq.innerText = (data.dac && data.dac.freq && data.dac.freq !== '-') ? `${data.dac.freq}` : '96000 Hz';
+            }
+
+            const statDacFmt = document.getElementById('stat-dac-format');
+            if (statDacFmt) {
+                statDacFmt.innerText = (data.dac && data.dac.format && data.dac.format !== '-') ? data.dac.format : 'S24_3LE';
+            }
+
+            const statDacCard = document.getElementById('stat-dac-card');
+            if (statDacCard) {
+                statDacCard.innerText = (data.dac && data.dac.card) ? data.dac.card : 'card1';
+            }
+
+            const statDacBuf = document.getElementById('stat-dac-buffer');
+            if (statDacBuf) {
+                statDacBuf.innerText = (data.dac && data.dac.buffer_size && data.dac.buffer_size !== '-') ? `${data.dac.buffer_size} Frames` : '4800 Frames';
+            }
+
+            const badgeDac = document.getElementById('dac-status-badge');
+            if (badgeDac) {
+                const isRun = data.dac && (data.dac.status === 'RUNNING' || (data.dac.status && data.dac.status.indexOf('Active') !== -1));
+                badgeDac.innerText = isRun ? 'STREAMING' : (dacFound ? 'STANDBY' : 'OFFLINE');
+                badgeDac.className = isRun ? 'badge active pulse' : 'badge';
+            }
+
+            // Volume Slider (Prevent polling overwrite while dragging or syncing)
+            if (data.volume !== undefined) {
+                const slider = document.getElementById('vol-slider');
+                const vMax = data.volume_max || 25;
+                const now = Date.now();
+                if (slider && !slider.matches(':active') && document.activeElement !== slider && !isVolumeSending && pendingVolume === null && (now - lastVolumeInteraction > 2500)) {
+                    slider.max = vMax;
+                    slider.value = data.volume;
+                    const lbl = document.getElementById('vol-label');
+                    if (lbl) lbl.innerText = `${data.volume} / ${vMax}`;
+                }
+            }
+
+            // 6. CPU & Thermal Telemetry
+            if (data.cpu) {
+                const cLit = document.getElementById('stat-cpu-little');
+                if (cLit) cLit.innerText = data.cpu.little_mhz || '1017 - 1804 MHz';
+
+                const cBig = document.getElementById('stat-cpu-big');
+                if (cBig) cBig.innerText = data.cpu.big_mhz || '1056 - 1612 MHz';
+
+                const cTemp = document.getElementById('stat-cpu-temp');
+                if (cTemp) {
+                    const tempNum = parseInt(data.cpu.temp || '48');
+                    cTemp.innerText = `${data.cpu.temp} (${tempNum < 55 ? 'Cool' : 'Warm'})`;
+                    cTemp.className = tempNum < 55 ? 'stat-val val-green' : (tempNum < 70 ? 'stat-val val-warn' : 'stat-val val-red');
+                }
+            }
+
+            const statKernel = document.getElementById('stat-kernel');
+            if (statKernel) {
+                if (data.kernel && data.kernel.display) {
+                    statKernel.innerText = data.kernel.display;
+                } else if (data.kernel && data.kernel.release) {
+                    statKernel.innerText = data.kernel.release;
+                } else if (data.kernel_release) {
+                    statKernel.innerText = data.kernel_release;
+                }
+            }
+
+            const statDevice = document.getElementById('stat-device');
+            if (statDevice && data.device_model) {
+                statDevice.innerText = data.device_model;
+            }
+
+            const statBatt = document.getElementById('stat-battery');
+            if (statBatt && data.battery) {
+                statBatt.innerText = `${data.battery.capacity}% (${data.battery.status})`;
+            }
+
+            const statUptime = document.getElementById('stat-uptime');
+            if (statUptime) {
+                if (currentLang === 'id' && data.uptime_id) {
+                    statUptime.innerText = data.uptime_id;
+                } else if (data.uptime_sec !== undefined && data.uptime_sec !== null) {
+                    const sec = parseInt(data.uptime_sec, 10) || 0;
+                    const d = Math.floor(sec / 86400);
+                    const h = Math.floor((sec % 86400) / 3600);
+                    const m = Math.floor((sec % 3600) / 60);
+                    const s = sec % 60;
+                    if (currentLang === 'id') {
+                        statUptime.innerText = d > 0 ? `${d} hari, ${h} jam, ${m} menit` : (h > 0 ? `${h} jam ${m} menit` : (m > 0 ? `${m} menit ${s} detik` : `${s} detik`));
+                    } else {
+                        statUptime.innerText = d > 0 ? `${d} days, ${h} hours, ${m} mins` : (h > 0 ? `${h} hours, ${m} mins` : (m > 0 ? `${m} mins ${s} secs` : `${s} secs`));
+                    }
+                } else {
+                    statUptime.innerText = data.uptime || '-';
+                }
+            }
+
+            // 7. USB Device Topology List
+            const countBadge = document.getElementById('usb-count');
+            if (countBadge) countBadge.innerText = `${data.usb_ext_count || 0} Devices`;
+
+            const usbContainer = document.getElementById('usb-device-container');
+            if (usbContainer) {
+                if (!data.usb_devices_list || data.usb_devices_list.length === 0) {
+                    usbContainer.innerHTML = `<div class="usb-device-card" style="color: var(--text-dim); justify-content: center;">${dict.usb_no_devices || 'No external USB devices detected.'}</div>`;
+                } else {
+                    let html = '';
+                    data.usb_devices_list.forEach(dev => {
+                        const devInfo = getUsbDeviceInfo(dev, lang);
+                        let mfrName = (dev.mfr || '').trim();
+                        if (dev.vid === '0461' && (!mfrName || mfrName === 'Generic')) {
+                            mfrName = 'Dell';
+                        }
+                        if (!mfrName) mfrName = 'Generic';
+
+                        html += `
+                            <div class="usb-device-card">
+                                <div class="usb-device-icon" style="color: ${devInfo.color}; font-size: 1.2rem; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px;">
+                                    <i class="${devInfo.icon}"></i>
+                                </div>
+                                <div style="flex: 1; min-width: 0;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                                        <div style="font-weight: 700; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${dev.prod || 'USB Device'}</div>
+                                        <span style="font-size: 0.65rem; padding: 2px 7px; border-radius: 4px; background: ${devInfo.badgeBg}; color: ${devInfo.color}; font-weight: 600; white-space: nowrap;">${devInfo.badge}</span>
+                                    </div>
+                                    <div style="font-size: 0.7rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${mfrName} • ${dev.vid}:${dev.pid} (Bus ${dev.bus || '001'} Dev ${dev.dev || '001'})</div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    usbContainer.innerHTML = html;
+                }
+            }
+
+            // 8. Update Manual Tweaks Button Active Highlights
+            if (data.tweaks) {
+                updateTweakButtons(data.tweaks, data);
+            }
+
+            // 9. Update OpenSSH Server Card Telemetry
+            if (data.ssh) {
+                updateSshTelemetry(data.ssh, data.ip);
+            }
+        }
+
+        let currKeyUser = 'root';
+        let currSshTab = 'keys';
+
+        function updateSshTelemetry(ssh, hostIp) {
+            if (!ssh) return;
+            const badge = document.getElementById('badge-ssh-status');
+            const isRun = ssh.running === 1 || ssh.running === true;
+            if (badge) {
+                if (isRun) {
+                    badge.innerHTML = `<i class="fa-solid fa-circle-check"></i> RUNNING (Port ${ssh.port})`;
+                    badge.className = 'badge active-green';
+                    badge.style.background = '';
+                    badge.style.color = '';
+                    badge.style.borderColor = '';
+                } else {
+                    badge.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> STOPPED`;
+                    badge.className = 'badge';
+                    badge.style.background = 'rgba(239, 68, 68, 0.2)';
+                    badge.style.color = '#ef4444';
+                    badge.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+                }
+            }
+
+            document.getElementById('btn-ssh-start')?.classList.toggle('active', isRun);
+            document.getElementById('btn-ssh-stop')?.classList.toggle('active', !isRun);
+
+            const isAuto = ssh.autostart === 1 || ssh.autostart === true;
+            document.getElementById('btn-ssh-auto-1')?.classList.toggle('active', isAuto);
+            document.getElementById('btn-ssh-auto-0')?.classList.toggle('active', !isAuto);
+
+            const portInput = document.getElementById('ssh-port-input');
+            if (portInput && document.activeElement !== portInput) {
+                portInput.value = ssh.port || 22;
+            }
+
+            const ip = ssh.ip || hostIp || window.location.hostname || '127.0.0.1';
+            const port = ssh.port || 22;
+
+            // Update Header SSH Badge with live IP and port
+            const badgeHeaderSsh = document.getElementById('badge-ssh');
+            if (badgeHeaderSsh) {
+                if (isRun && ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') {
+                    badgeHeaderSsh.innerHTML = `<i class="fa-solid fa-terminal"></i> SSH: ${ip}:${port}`;
+                    badgeHeaderSsh.className = 'badge active';
+                    badgeHeaderSsh.title = `SSH Server running at ${ip}:${port} (Click to scroll)`;
+                } else if (isRun) {
+                    badgeHeaderSsh.innerHTML = `<i class="fa-solid fa-terminal"></i> SSH: Port ${port}`;
+                    badgeHeaderSsh.className = 'badge active';
+                    badgeHeaderSsh.title = `SSH Server running on Port ${port}`;
+                } else {
+                    badgeHeaderSsh.innerHTML = `<i class="fa-solid fa-terminal"></i> SSH: Offline`;
+                    badgeHeaderSsh.className = 'badge';
+                    badgeHeaderSsh.title = `SSH Server Stopped`;
+                }
+            }
+
+            const epLabel = document.getElementById('ssh-endpoint-label');
+            if (epLabel) epLabel.innerText = `Host: ${ip}:${port}`;
+            const cmdRoot = document.getElementById('ssh-cmd-root');
+            if (cmdRoot) cmdRoot.innerText = `ssh -p ${port} root@${ip}`;
+            const cmdShell = document.getElementById('ssh-cmd-shell');
+            if (cmdShell) cmdShell.innerText = `ssh -p ${port} shell@${ip}`;
+        }
+
+        async function sshAction(act) {
+            const isId = (currentLang === 'id');
+            showToast(isId ? `Menjalankan perintah SSH ${act}...` : `Executing SSH ${act}...`, 'loading');
+            try {
+                const res = await getApiData(`ssh_${act}`);
+                showToast(res && res.message ? res.message : (isId ? `SSH ${act} berhasil` : `SSH ${act} successful`), 'success', 2500);
+                setTimeout(fetchStatus, 1000);
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        async function sshSetAutostart(val) {
+            const isId = (currentLang === 'id');
+            showToast(isId ? `Mengubah autostart SSH...` : `Configuring SSH autostart...`, 'loading');
+            try {
+                const res = await getApiData(`ssh_set_autostart&val=${val}`);
+                showToast(res && res.message ? res.message : (isId ? `Autostart SSH diubah` : `SSH autostart updated`), 'success', 2500);
+                setTimeout(fetchStatus, 500);
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        async function sshSetPort() {
+            const p = document.getElementById('ssh-port-input')?.value;
+            if (!p) return;
+            const isId = (currentLang === 'id');
+            showToast(isId ? `Mengubah port SSH ke ${p}...` : `Changing SSH port to ${p}...`, 'loading');
+            try {
+                const res = await getApiData(`ssh_set_port&port=${p}`);
+                showToast(res && res.message ? res.message : (isId ? `Port SSH berhasil diubah ke ${p}` : `SSH port changed to ${p}`), 'success', 2500);
+                setTimeout(fetchStatus, 1000);
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        function copySshCmd(u) {
+            const el = document.getElementById(`ssh-cmd-${u}`);
+            if (el && el.innerText) {
+                navigator.clipboard.writeText(el.innerText).then(() => {
+                    showToast(currentLang === 'id' ? `Perintah SSH ${u} disalin ke clipboard!` : `SSH command for ${u} copied to clipboard!`);
+                });
+            }
+        }
+
+        function switchSshTab(tab) {
+            currSshTab = tab;
+            ['keys', 'config', 'logs', 'password'].forEach(t => {
+                const btn = document.getElementById(`tab-btn-${t}`);
+                const panel = document.getElementById(`ssh-subpanel-${t}`);
+                if (btn) btn.classList.toggle('active', t === tab);
+                if (panel) panel.style.display = (t === tab) ? 'block' : 'none';
+            });
+            if (tab === 'keys') loadSshKeys();
+            else if (tab === 'config') loadSshConfig();
+            else if (tab === 'logs') loadSshLog();
+        }
+
+        function setKeyUser(u) {
+            currKeyUser = u;
+            document.getElementById('btn-user-root')?.classList.toggle('active', u === 'root');
+            document.getElementById('btn-user-shell')?.classList.toggle('active', u === 'shell');
+            loadSshKeys();
+        }
+
+        async function loadSshKeys() {
+            const container = document.getElementById('ssh-keys-container');
+            if (container) container.innerHTML = `<div style="font-size: 0.78rem; color: var(--text-dim); padding: 8px;"><i class="fa-solid fa-spinner fa-spin"></i> ${currentLang === 'id' ? 'Memuat daftar kunci...' : 'Loading keys...'}</div>`;
+            try {
+                const res = await getApiData(`ssh_get_keys&user=${currKeyUser}`);
+                if (container) {
+                    if (!res || !res.keys || res.keys.length === 0) {
+                        const dict = i18n[currentLang] || i18n.en;
+                        container.innerHTML = `<div style="font-size: 0.78rem; color: var(--text-dim); padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px; text-align: center;"><i class="fa-solid fa-key" style="opacity: 0.5;"></i> ${dict.no_keys_found}</div>`;
+                    } else {
+                        let html = '';
+                        res.keys.forEach(k => {
+                            html += `
+                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(0,0,0,0.3); border-radius: 8px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.05); gap: 10px;">
+                                    <div style="flex: 1; min-width: 0;">
+                                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;">
+                                            <span class="badge" style="font-size: 0.68rem; padding: 1px 6px;">${k.type}</span>
+                                            <span style="font-size: 0.8rem; font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${k.comment}</span>
+                                        </div>
+                                        <div style="font-size: 0.7rem; color: var(--text-dim); font-family: monospace;">${k.fingerprint}</div>
+                                    </div>
+                                    <button class="btn" style="padding: 4px 8px; color: #ef4444; border-color: rgba(239,68,68,0.3);" onclick="deleteSshKey(${k.line})"><i class="fa-solid fa-trash"></i></button>
+                                </div>
+                            `;
+                        });
+                        container.innerHTML = html;
+                    }
+                }
+            } catch (err) {
+                if (container) container.innerHTML = `<div style="color: #ef4444; font-size: 0.78rem;">Error: ${err.message}</div>`;
+            }
+        }
+
+        async function addSshKey() {
+            const input = document.getElementById('ssh-new-key-input');
+            const key = input ? input.value.trim() : '';
+            if (!key) {
+                showToast(currentLang === 'id' ? "Silakan tempel public key terlebih dahulu" : "Please paste a public key first", 'warning');
+                return;
+            }
+            showToast(currentLang === 'id' ? "Menambahkan public key..." : "Adding public key...", 'loading');
+            try {
+                const b64 = btoa(key);
+                const res = await getApiData(`ssh_add_key&user=${currKeyUser}&b64=${encodeURIComponent(b64)}`);
+                if (res && res.success) {
+                    showToast(res.message || (currentLang === 'id' ? "Kunci berhasil ditambahkan" : "Key added successfully"), 'success', 2500);
+                    if (input) input.value = '';
+                    loadSshKeys();
+                    fetchStatus();
+                } else {
+                    showToast(res && res.error ? res.error : "Failed to add key", 'error', 3500);
+                }
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        async function deleteSshKey(line) {
+            if (!confirm(currentLang === 'id' ? `Hapus kunci pada baris ${line}?` : `Delete key at line ${line}?`)) return;
+            showToast(currentLang === 'id' ? "Menghapus kunci..." : "Deleting key...", 'loading');
+            try {
+                const res = await getApiData(`ssh_delete_key&user=${currKeyUser}&line=${line}`);
+                showToast(res && res.message ? res.message : (currentLang === 'id' ? "Kunci berhasil dihapus" : "Key deleted successfully"), 'success', 2500);
+                loadSshKeys();
+                fetchStatus();
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        async function loadSshConfig() {
+            const editor = document.getElementById('ssh-config-editor');
+            if (editor) editor.value = "Loading sshd_config...";
+            try {
+                const res = await getApiData('ssh_get_config');
+                if (editor) {
+                    if (res && res.config_b64) {
+                        editor.value = atob(res.config_b64);
+                    } else {
+                        editor.value = "Failed to load config";
+                    }
+                }
+            } catch (err) {
+                if (editor) editor.value = "Error: " + err.message;
+            }
+        }
+
+        async function saveSshConfig() {
+            const editor = document.getElementById('ssh-config-editor');
+            if (!editor) return;
+            showToast(currentLang === 'id' ? "Menyimpan sshd_config..." : "Saving sshd_config...", 'loading');
+            try {
+                const b64 = btoa(editor.value);
+                const res = await getApiData(`ssh_save_config&b64=${encodeURIComponent(b64)}`);
+                showToast(res && res.message ? res.message : (currentLang === 'id' ? "Konfigurasi SSH berhasil disimpan" : "SSH config saved successfully"), 'success', 2500);
+                setTimeout(fetchStatus, 1500);
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        async function loadSshLog() {
+            const viewer = document.getElementById('ssh-log-viewer');
+            if (viewer) viewer.innerText = "Loading sshd.log...";
+            try {
+                const res = await getApiData('ssh_get_log');
+                if (viewer) {
+                    if (res && res.log_b64) {
+                        const txt = atob(res.log_b64);
+                        viewer.innerText = txt || "No logs recorded yet.";
+                        viewer.scrollTop = viewer.scrollHeight;
+                    } else {
+                        viewer.innerText = "No logs recorded yet.";
+                    }
+                }
+            } catch (err) {
+                if (viewer) viewer.innerText = "Error: " + err.message;
+            }
+        }
+
+        async function clearSshLog() {
+            if (!confirm(currentLang === 'id' ? "Hapus seluruh log server SSH?" : "Clear all SSH server logs?")) return;
+            showToast(currentLang === 'id' ? "Membersihkan log SSH..." : "Clearing SSH logs...", 'loading');
+            try {
+                const res = await getApiData('ssh_clear_log');
+                showToast(res && res.message ? res.message : (currentLang === 'id' ? "Log SSH berhasil dibersihkan" : "SSH log cleared"), 'success', 2000);
+                loadSshLog();
+            } catch (err) {
+                showToast("Error: " + err.message, 'error', 3500);
+            }
+        }
+
+        async function executeCustomCmd() {
+            const input = document.getElementById('cmd-input');
+            const cmd = input ? input.value.trim() : '';
+            if (!cmd) return;
+            await runCmd(cmd);
+        }
+
+        async function runCmd(cmd) {
+            const isId = (currentLang === 'id');
+            showToast(isId ? `Menjalankan: ${cmd.slice(0, 28)}...` : `Running: ${cmd.slice(0, 28)}...`, 'loading');
+            const term = document.getElementById('terminal-out');
+            if (term) term.innerText = `[root@jacktor ~]# ${cmd}
+Executing...`;
+            
+            let output = '';
+            if (window.ksu && typeof window.ksu.exec === 'function') {
+                try {
+                    output = await window.ksu.exec(cmd);
+                    showToast(isId ? 'Perintah berhasil dieksekusi' : 'Command executed successfully', 'success', 2000);
+                } catch (e) {
+                    output = "Error: " + e.message;
+                    showToast("Error: " + e.message, 'error', 3500);
+                }
+            } else {
+                try {
+                    const res = await getApiData(`exec&cmd=${encodeURIComponent(cmd)}`);
+                    output = res && res.output ? res.output : (res && res.error ? res.error : 'Command completed.');
+                    showToast(isId ? 'Perintah berhasil dieksekusi' : 'Command executed successfully', 'success', 2000);
+                } catch (err) {
+                    output = "Error: " + err.message;
+                    showToast("Error: " + err.message, 'error', 3500);
+                }
+            }
+            if (term) term.innerText = `[root@jacktor ~]# ${cmd}
+${output.trim()}`;
+        }
+
+        window.addEventListener('resize', () => {
+            const trTitle = document.getElementById('track-title');
+            if (trTitle) trTitle.dataset.boxW = '';
+            const trArtist = document.getElementById('track-artist');
+            if (trArtist) trArtist.dataset.boxW = '';
+            updateMarquee(trTitle, document.getElementById('box-track-title'), 'title');
+            updateMarquee(trArtist, document.getElementById('box-track-artist'), 'artist');
+        });
+
+        // Initialize i18n and authenticate session
+        applyLanguage(currentLang);
+        initAuth();
+    </script>
+</body>
+</html>

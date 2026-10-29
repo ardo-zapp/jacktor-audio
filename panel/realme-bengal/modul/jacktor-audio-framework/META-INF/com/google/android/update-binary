@@ -1,0 +1,21 @@
+#!/sbin/sh
+#################
+# Magisk / KernelSU / APatch Module Installer Script
+#################
+#MAGISK
+
+# Set environment
+[ -z "$OUTFD" ] && OUTFD=1
+[ -z "$ZIPFILE" ] && ZIPFILE="$1"
+
+# Load utility functions from detected root manager
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+    . /data/adb/magisk/util_functions.sh
+elif [ -f /data/adb/ksu/bin/util_functions.sh ]; then
+    . /data/adb/ksu/bin/util_functions.sh
+elif [ -f /data/adb/ap/bin/util_functions.sh ]; then
+    . /data/adb/ap/bin/util_functions.sh
+fi
+
+install_module
+exit 0

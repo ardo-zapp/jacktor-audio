@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jacktor Audio Framework - Login</title>
+    
+    <!-- Synchronous Session Check: Redirect to Dashboard if already logged in -->
+    <script>
+        (function() {
+            var token = localStorage.getItem('jacktor_token') || sessionStorage.getItem('jacktor_token');
+            if (token) {
+                window.location.replace('/');
+            }
+        })();
+    </script>
+
+    <!-- FontAwesome Local / Offline Icons -->
+    <link rel="stylesheet" href="/css/all.min.css">
+
+    <style>
+        :root {
+            --bg-base: #030712;
+            --card-bg: rgba(17, 24, 39, 0.88);
+            --border-color: rgba(56, 189, 248, 0.28);
+            --accent-cyan: #38bdf8;
+            --accent-blue: #2563eb;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --text-muted: #cbd5e1;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background: radial-gradient(circle at 50% 25%, rgba(14, 165, 233, 0.15), transparent 70%), var(--bg-base);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .login-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 34px 30px;
+            width: 100%;
+            max-width: 430px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75), 0 0 30px rgba(14, 165, 233, 0.15);
+            animation: fadeIn 0.35s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .btn-lang {
+            background: rgba(14, 165, 233, 0.12);
+            border: 1px solid rgba(56, 189, 248, 0.35);
+            color: var(--accent-cyan);
+            padding: 5px 12px;
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-lang:hover {
+            background: rgba(14, 165, 233, 0.25);
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 10px rgba(14, 165, 233, 0.3);
+        }
+
+        .login-brand {
+            text-align: center;
+            margin-bottom: 22px;
+        }
+
+        .login-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.25), rgba(99, 102, 241, 0.25));
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.7rem;
+            color: var(--accent-cyan);
+            margin: 0 auto 12px auto;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+        }
+
+        .login-title {
+            font-size: 1.25rem;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            background: linear-gradient(135deg, #fff 40%, var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 6px;
+        }
+
+        .login-subtitle {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            line-height: 1.45;
+        }
+
+        .login-error {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            color: #fca5a5;
+            padding: 10px 14px;
+            border-radius: 10px;
+            font-size: 0.78rem;
+            margin-bottom: 16px;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .login-form-group {
+            margin-bottom: 15px;
+        }
+
+        .login-label {
+            display: block;
+            font-size: 0.76rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+
+        .login-input-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .login-input-wrap i.prefix-icon {
+            position: absolute;
+            left: 14px;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            pointer-events: none;
+        }
+
+        .login-input {
+            width: 100%;
+            padding: 12px 14px 12px 38px;
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 0.88rem;
+            font-family: inherit;
+            transition: all 0.2s;
+            outline: none;
+        }
+
+        .login-input:focus {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+            background: rgba(0, 0, 0, 0.65);
+        }
+
+        .login-toggle-eye {
+            position: absolute;
+            right: 12px;
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 0.9rem;
+            padding: 4px;
+        }
+
+        .login-toggle-eye:hover {
+            color: #fff;
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 12px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #0284c7, #2563eb);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            color: #fff;
+            font-weight: 700;
+            font-size: 0.92rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s;
+            box-shadow: 0 4px 15px rgba(2, 132, 199, 0.4);
+        }
+
+        .login-btn:hover {
+            filter: brightness(1.15);
+            box-shadow: 0 6px 20px rgba(2, 132, 199, 0.6);
+            transform: translateY(-1px);
+        }
+
+        .login-btn:active {
+            transform: translateY(1px);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="login-card">
+        <!-- Language Switcher -->
+        <div style="display: flex; justify-content: flex-end; margin-bottom: -6px;">
+            <button class="btn-lang" onclick="toggleLanguage()" id="login-btn-lang" title="Switch Language / Ganti Bahasa">
+                <i class="fa-solid fa-globe"></i> <span id="login-lang-label">EN</span>
+            </button>
+        </div>
+
+        <!-- Brand Header -->
+        <div class="login-brand">
+            <div class="login-icon"><i class="fa-solid fa-shield-halved"></i></div>
+            <div class="login-title" id="txt-login-title">Sign In to Jacktor Dashboard</div>
+            <div class="login-subtitle" id="txt-login-desc">Enter system credentials to access audio DSP engine & hardware settings</div>
+        </div>
+
+        <!-- Error Alert -->
+        <div id="login-error-box" class="login-error">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            <span id="login-error-text">Invalid username or password. Default is root / admin123</span>
+        </div>
+
+        <!-- Login Form -->
+        <form id="login-form" onsubmit="handleLoginSubmit(event)">
+            <div class="login-form-group">
+                <label class="login-label" id="lbl-login-user">Username</label>
+                <div class="login-input-wrap">
+                    <i class="fa-solid fa-user prefix-icon"></i>
+                    <input type="text" id="login-username" class="login-input" value="root" autocomplete="username" required>
+                </div>
+            </div>
+
+            <div class="login-form-group">
+                <label class="login-label" id="lbl-login-pass">Password</label>
+                <div class="login-input-wrap">
+                    <i class="fa-solid fa-lock prefix-icon"></i>
+                    <input type="password" id="login-password" class="login-input" placeholder="••••••••••••" autocomplete="current-password" required>
+                    <button type="button" class="login-toggle-eye" onclick="togglePasswordVisibility('login-password', this)">
+                        <i class="fa-solid fa-eye"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; font-size: 0.76rem; color: var(--text-dim);">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="login-remember" checked style="accent-color: var(--accent-cyan); cursor: pointer;">
+                    <span id="lbl-login-remember">Remember session on this device</span>
+                </label>
+            </div>
+
+            <button type="submit" id="btn-login-submit" class="login-btn">
+                <i class="fa-solid fa-arrow-right-to-bracket"></i>
+                <span id="lbl-login-btn">Login to System</span>
+            </button>
+        </form>
+
+        <div style="text-align: center; margin-top: 18px; font-size: 0.72rem; color: var(--text-dim); opacity: 0.8;">
+            <i class="fa-solid fa-key"></i> Default credentials: <code style="color: var(--accent-cyan); font-weight: 600;">root / admin123</code>
+        </div>
+    </div>
+
+    <script>
+        const i18n = {
+            en: {
+                title: "Sign In to Jacktor Dashboard",
+                desc: "Enter system credentials to access audio DSP engine & hardware settings",
+                user: "Username",
+                pass: "Password",
+                remember: "Remember session on this device",
+                btn: "Login to System",
+                logging_in: "Logging in...",
+                err_invalid: "Invalid username or password. Default is root / admin123"
+            },
+            id: {
+                title: "Masuk ke Dashboard Jacktor",
+                desc: "Masukkan kredensial sistem untuk mengakses DSP audio & pengaturan hardware",
+                user: "Nama Pengguna",
+                pass: "Kata Sandi",
+                remember: "Ingat sesi di perangkat ini",
+                btn: "Masuk ke Sistem",
+                logging_in: "Sedang masuk...",
+                err_invalid: "Nama pengguna atau kata sandi salah. Bawaan: root / admin123"
+            }
+        };
+
+        const urlParams = new URLSearchParams(window.location.search);
+        let currentLang = urlParams.get('lang') || localStorage.getItem('jacktor_lang') || 'en';
+
+        function applyLanguage(lang) {
+            currentLang = lang;
+            localStorage.setItem('jacktor_lang', lang);
+            const dict = i18n[lang] || i18n.en;
+            
+            document.getElementById('login-lang-label').innerText = lang.toUpperCase();
+            document.getElementById('txt-login-title').innerText = dict.title;
+            document.getElementById('txt-login-desc').innerText = dict.desc;
+            document.getElementById('lbl-login-user').innerText = dict.user;
+            document.getElementById('lbl-login-pass').innerText = dict.pass;
+            document.getElementById('lbl-login-remember').innerText = dict.remember;
+            document.getElementById('lbl-login-btn').innerText = dict.btn;
+            document.getElementById('login-error-text').innerText = dict.err_invalid;
+        }
+
+        function toggleLanguage() {
+            applyLanguage(currentLang === 'en' ? 'id' : 'en');
+        }
+
+        function togglePasswordVisibility(inputId, btn) {
+            const el = document.getElementById(inputId);
+            if (!el) return;
+            if (el.type === 'password') {
+                el.type = 'text';
+                btn.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+            } else {
+                el.type = 'password';
+                btn.innerHTML = '<i class="fa-solid fa-eye"></i>';
+            }
+        }
+
+        async function handleLoginSubmit(event) {
+            if (event) event.preventDefault();
+            const userInput = document.getElementById('login-username');
+            const passInput = document.getElementById('login-password');
+            const rememberInput = document.getElementById('login-remember');
+            const errorBox = document.getElementById('login-error-box');
+            const submitBtn = document.getElementById('btn-login-submit');
+
+            const u = userInput ? userInput.value.trim() : '';
+            const p = passInput ? passInput.value : '';
+            const remember = rememberInput ? rememberInput.checked : true;
+            const dict = i18n[currentLang] || i18n.en;
+
+            if (errorBox) errorBox.style.display = 'none';
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>${dict.logging_in}</span>`;
+            }
+
+            try {
+                const bodyData = `action=auth_login&user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}`;
+                let res = null;
+                try {
+                    const resp = await fetch('/cgi-bin/api.sh', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: bodyData
+                    });
+                    if (resp.ok) res = await resp.json();
+                } catch (e1) {
+                    const resp = await fetch(`/cgi-bin/api.sh?action=auth_login&user=${encodeURIComponent(u)}&pass=${encodeURIComponent(p)}`);
+                    if (resp.ok) res = await resp.json();
+                }
+
+                if (res && res.success && res.token) {
+                    sessionStorage.setItem('jacktor_token', res.token);
+                    if (remember) {
+                        localStorage.setItem('jacktor_token', res.token);
+                    } else {
+                        localStorage.removeItem('jacktor_token');
+                    }
+                    // Redirect directly to dashboard
+                    window.location.replace('/');
+                } else {
+                    if (errorBox) {
+                        const errText = document.getElementById('login-error-text');
+                        if (errText && res && res.error) {
+                            errText.innerText = res.error;
+                        } else if (errText) {
+                            errText.innerText = dict.err_invalid;
+                        }
+                        errorBox.style.display = 'flex';
+                    }
+                }
+            } catch (err) {
+                if (errorBox) {
+                    const errText = document.getElementById('login-error-text');
+                    if (errText) errText.innerText = "Error: " + err.message;
+                    errorBox.style.display = 'flex';
+                }
+            } finally {
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = `<i class="fa-solid fa-arrow-right-to-bracket"></i> <span id="lbl-login-btn">${dict.btn}</span>`;
+                }
+            }
+        }
+
+        // Initialize language
+        applyLanguage(currentLang);
+    </script>
+</body>
+</html>

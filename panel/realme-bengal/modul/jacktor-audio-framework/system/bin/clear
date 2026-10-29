@@ -1,0 +1,4 @@
+#!/system/bin/sh
+# Jacktor Audio Framework - Full Screen & Scrollback Clear
+# Emits \033[3J (clear scrollback buffer) + \033[H\033[2J (home cursor + clear screen)
+printf '\033[3J\033[H\033[2J'

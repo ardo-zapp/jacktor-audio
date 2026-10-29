@@ -1,0 +1,80 @@
+#!/system/bin/sh
+# Jacktor Audio Framework - Safe OTG Trigger & State Utility
+ACTION="${1:-status}"
+CONF_DIR="/data/adb/modules/jacktor-audio-framework/config"
+mkdir -p "$CONF_DIR" 2>/dev/null
+STATE_FILE="${CONF_DIR}/usb_mode_state"
+
+CURR_MODE="$(cat /sys/devices/platform/soc/4e00000.ssusb/mode 2>/dev/null)"
+OTG_SW="$(cat /sys/class/power_supply/usb/otg_switch 2>/dev/null)"
+
+case "$ACTION" in
+    host|1)
+        [ "$2" != "internal" ] && echo "host" > "$STATE_FILE" 2>/dev/null && setprop persist.jacktor.usb_mode host
+        echo "[*] Activating USB OTG Host Mode with Auto Re-Trigger..."
+        echo "" > /config/usb_gadget/g1/UDC 2>/dev/null
+        sleep 0.2
+        echo host > /sys/devices/platform/soc/4e00000.ssusb/mode 2>/dev/null
+        echo 1 > /sys/class/power_supply/usb/otg_switch 2>/dev/null
+        echo 1 > /sys/class/oplus_chg/usb/otg_switch 2>/dev/null
+        sleep 0.3
+        lsusb >/dev/null 2>&1
+        echo "[+] Host Mode active and USB re-triggered. Mode: $(cat /sys/devices/platform/soc/4e00000.ssusb/mode 2>/dev/null)"
+        ;;
+    device|peripheral|gadget|0)
+        [ "$2" != "internal" ] && echo "device" > "$STATE_FILE" 2>/dev/null && setprop persist.jacktor.usb_mode device
+        echo "[*] Switching to USB Peripheral (Gadget) Mode..."
+        echo 0 > /sys/class/power_supply/usb/otg_switch 2>/dev/null
+        echo 0 > /sys/class/oplus_chg/usb/otg_switch 2>/dev/null
+        sleep 0.2
+        echo peripheral > /sys/devices/platform/soc/4e00000.ssusb/mode 2>/dev/null
+        CONF="$(getprop persist.sys.usb.config)"
+        [ -z "$CONF" ] && CONF="adb"
+        setprop sys.usb.config "$CONF"
+        echo "[+] Device / Gadget Mode active. Mode: $(cat /sys/devices/platform/soc/4e00000.ssusb/mode 2>/dev/null)"
+        ;;
+    auto)
+        [ "$2" != "internal" ] && echo "auto" > "$STATE_FILE" 2>/dev/null && setprop persist.jacktor.usb_mode auto
+        echo "[*] Applying Auto Mode (dynamic ID-pin detection)..."
+        # In Auto mode, arm the ID pin monitor with bias-pull-up
+        echo 1 > /sys/class/power_supply/usb/otg_switch 2>/dev/null
+        echo 1 > /sys/class/oplus_chg/usb/otg_switch 2>/dev/null
+        sleep 0.3
+        EXTCON="$(cat /sys/class/extcon/extcon1/state 2>/dev/null)"
+        if echo "$EXTCON" | grep -q "USB-HOST=1"; then
+            echo "" > /config/usb_gadget/g1/UDC 2>/dev/null
+            echo host > /sys/devices/platform/soc/4e00000.ssusb/mode 2>/dev/null
+            lsusb >/dev/null 2>&1
+            echo "[+] Auto Mode: OTG cable detected -> Host active."
+        else
+            echo peripheral > /sys/devices/platform/soc/4e00000.ssusb/mode 2>/dev/null
+            CONF="$(getprop persist.sys.usb.config)"
+            [ -z "$CONF" ] && CONF="adb"
+            setprop sys.usb.config "$CONF"
+            echo "[+] Auto Mode: No OTG cable detected -> Peripheral standby."
+        fi
+        ;;
+    trigger)
+        echo "[*] Re-triggering USB bus enumeration..."
+        lsusb >/dev/null 2>&1
+        echo "[+] USB bus re-scanned."
+        ;;
+    status|*)
+        SAVED="auto"
+        [ -f "$STATE_FILE" ] && SAVED="$(cat "$STATE_FILE" 2>/dev/null)"
+        echo "=================================================="
+        echo "  JACKTOR AUDIO FRAMEWORK - USB OTG STATUS        "
+        echo "=================================================="
+        echo "Saved Target Mode : $SAVED"
+        echo "OTG Switch (PMIC) : $OTG_SW"
+        echo "OTG Online        : $(cat /sys/class/power_supply/usb/otg_online 2>/dev/null)"
+        echo "VBUS Voltage      : $(cat /sys/class/power_supply/usb/voltage_now 2>/dev/null) uV"
+        echo "Extcon1 State     : $(tr '\n' ' ' < /sys/class/extcon/extcon1/state 2>/dev/null)"
+        echo "SSUSB Controller  : $CURR_MODE"
+        echo "Gadget UDC Bound  : $(cat /config/usb_gadget/g1/UDC 2>/dev/null)"
+        echo "--------------------------------------------------"
+        echo "Connected USB Devices:"
+        lsusb 2>/dev/null
+        echo "=================================================="
+        ;;
+esac

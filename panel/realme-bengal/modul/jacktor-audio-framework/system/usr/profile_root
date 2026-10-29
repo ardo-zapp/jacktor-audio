@@ -1,0 +1,49 @@
+# Jacktor Audio Framework - OpenSSH Linux Environment (Root)
+export USER=root
+export LOGNAME=root
+export HOME=/data/adb/ssh/root
+export TERM=xterm-256color
+export PATH=/data/adb/modules/jacktor-audio-framework/system/bin:/data/adb/ap/bin:/system/bin:/system/xbin:$PATH
+
+# Dynamic Hostname / IP detection (Like Ubuntu)
+_HOST=""
+if [ -f /data/adb/ssh/hostname ]; then
+    _H="$(cat /data/adb/ssh/hostname 2>/dev/null | tr -d ' \r\n')"
+    [ -n "$_H" ] && _HOST="$_H"
+fi
+
+if [ -z "$_HOST" ] && [ -n "$SSH_CONNECTION" ]; then
+    _SIP="$(echo "$SSH_CONNECTION" | awk '{print $3}')"
+    [ -n "$_SIP" ] && [ "$_SIP" != "0.0.0.0" ] && _HOST="$_SIP"
+fi
+
+if [ -z "$_HOST" ]; then
+    _NETH="$(getprop net.hostname 2>/dev/null | tr -d ' \r\n')"
+    [ -n "$_NETH" ] && [ "$_NETH" != "localhost" ] && _HOST="$_NETH"
+fi
+
+if [ -z "$_HOST" ]; then
+    _IP="$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}')"
+    [ -z "$_IP" ] && _IP="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}' | head -n 1)"
+    [ -n "$_IP" ] && _HOST="$_IP"
+fi
+
+[ -z "$_HOST" ] && _HOST="127.0.0.1"
+
+export HOSTNAME="root@${_HOST}"
+
+alias ls='ls --color=auto 2>/dev/null || ls'
+alias ll='ls -la --color=auto 2>/dev/null || ls -la'
+alias la='ls -A'
+alias l='ls -CF'
+alias clear='printf "\033[3J\033[H\033[2J"'
+
+if [ -t 0 ]; then
+    if [ -x /data/adb/ssh/jacktor-motd ]; then
+        /data/adb/ssh/jacktor-motd "root" "$_HOST"
+    elif [ -x /data/adb/modules/jacktor-audio-framework/system/bin/jacktor-motd ]; then
+        /data/adb/modules/jacktor-audio-framework/system/bin/jacktor-motd "root" "$_HOST"
+    elif [ -x /system/bin/jacktor-motd ]; then
+        /system/bin/jacktor-motd "root" "$_HOST"
+    fi
+fi
