@@ -20,12 +20,12 @@ case "$TARGET" in
         echo "--> [2/3] Running upload.py (Direct USB)..."
         python3 upload.py usb
         ;;
-    adb|android|panel)
-        echo "--> [2/3] Running upload.py (via ADB)..."
-        python3 upload.py adb
+    ssh|android|panel|wifi|remote|adb)
+        echo "--> [2/3] Running upload.py (via SSH)..."
+        python3 upload.py ssh
         ;;
     *)
-        echo "❌ Error: Unknown target '$TARGET'! Use 'usb' or 'adb'."
+        echo "❌ Error: Unknown target '$TARGET'! Use 'usb' or 'ssh'."
         exit 1
         ;;
 esac

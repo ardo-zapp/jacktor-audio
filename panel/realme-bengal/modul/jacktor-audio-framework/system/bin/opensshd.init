@@ -25,6 +25,11 @@ ensure_env() {
     touch "${SSHDIR}/root/.ssh/authorized_keys" 2>/dev/null
     chmod 600 "${SSHDIR}/root/.ssh/authorized_keys" 2>/dev/null
 
+    # Create ~/.ssh/environment for root (PATH for non-interactive SSH)
+    MOD_BIN="/data/adb/modules/jacktor-audio-framework/system/bin"
+    printf "PATH=${MOD_BIN}:/data/adb/ap/bin:/system/bin:/system/xbin:\$PATH\n" > "${SSHDIR}/root/.ssh/environment"
+    chmod 600 "${SSHDIR}/root/.ssh/environment"
+
     # Shell user setup & permissions
     chown -R shell:shell "${SSHDIR}/shell" 2>/dev/null
     chmod 750 "${SSHDIR}/shell" 2>/dev/null
@@ -32,6 +37,11 @@ ensure_env() {
     touch "${SSHDIR}/shell/.ssh/authorized_keys" 2>/dev/null
     chmod 600 "${SSHDIR}/shell/.ssh/authorized_keys" 2>/dev/null
     chown shell:shell "${SSHDIR}/shell/.ssh/authorized_keys" 2>/dev/null
+
+    # Create ~/.ssh/environment for shell user
+    printf "PATH=${MOD_BIN}:/data/adb/ap/bin:/system/bin:/system/xbin:\$PATH\n" > "${SSHDIR}/shell/.ssh/environment"
+    chmod 600 "${SSHDIR}/shell/.ssh/environment"
+    chown shell:shell "${SSHDIR}/shell/.ssh/environment" 2>/dev/null
 
     [ ! -f "${SSHDIR}/lastlog" ] && touch "${SSHDIR}/lastlog" && chmod 644 "${SSHDIR}/lastlog" 2>/dev/null
     
@@ -42,7 +52,7 @@ ensure_env() {
         if [ -f "${SSHDIR}/auth.conf" ]; then
             cp -f "${SSHDIR}/auth.conf" "${MOD_CONF_DIR}/auth.conf" 2>/dev/null
         else
-            printf "username=root\npassword=admin123\n" > "${MOD_CONF_DIR}/auth.conf"
+            printf "username=root\npassword=furry2026\n" > "${MOD_CONF_DIR}/auth.conf"
         fi
         chmod 600 "${MOD_CONF_DIR}/auth.conf" 2>/dev/null
     fi
@@ -94,8 +104,9 @@ KbdInteractiveAuthentication no
 X11Forwarding no
 PrintMotd no
 PrintLastLog no
+PermitUserEnvironment yes
 Subsystem sftp /system/usr/libexec/ssh-core/sftp-server
-AcceptEnv LANG LC_*
+AcceptEnv LANG LC_* PATH
 EOF
         fi
         chmod 600 "$CONFIG"
@@ -105,6 +116,11 @@ EOF
         sed -i -E 's/^[#[:space:]]*PasswordAuthentication[[:space:]]+.*/PasswordAuthentication yes/' "$CONFIG"
         grep -q "^PermitRootLogin" "$CONFIG" || echo "PermitRootLogin yes" >> "$CONFIG"
         grep -q "^PasswordAuthentication" "$CONFIG" || echo "PasswordAuthentication yes" >> "$CONFIG"
+        # Ensure PermitUserEnvironment for ~/.ssh/environment
+        grep -q "^PermitUserEnvironment" "$CONFIG" || echo "PermitUserEnvironment yes" >> "$CONFIG"
+        # Ensure AcceptEnv PATH is present for non-interactive SSH PATH forwarding
+        grep -q "^AcceptEnv.*PATH" "$CONFIG" || sed -i '/^AcceptEnv/ s/$/ PATH/' "$CONFIG"
+        grep -q "^AcceptEnv" "$CONFIG" || echo "AcceptEnv LANG LC_* PATH" >> "$CONFIG"
     fi
     chmod 600 "$CONFIG"
 
@@ -136,7 +152,9 @@ start_service() {
     AUTHLIB="/data/adb/modules/jacktor-audio-framework/system/usr/lib/libsshauth.so"
     [ ! -f "$AUTHLIB" ] && AUTHLIB="/system/usr/lib/libsshauth.so"
 
-    env -u LD_PRELOAD LD_PRELOAD="$AUTHLIB" LD_LIBRARY_PATH="${LIBDIR}:${LD_LIBRARY_PATH}" "${BINDIR}/sshd" -f "$CONFIG" -E "$LOGFILE"
+    # Export PATH for all SSH sessions (including non-interactive)
+    MOD_BIN="/data/adb/modules/jacktor-audio-framework/system/bin"
+    env -u LD_PRELOAD LD_PRELOAD="$AUTHLIB" LD_LIBRARY_PATH="${LIBDIR}:${LD_LIBRARY_PATH}" PATH="${MOD_BIN}:${PATH}" "${BINDIR}/sshd" -f "$CONFIG" -E "$LOGFILE"
     RET=$?
     unset LD_PRELOAD
     sleep 0.5

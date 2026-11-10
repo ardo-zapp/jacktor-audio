@@ -1,0 +1,14 @@
+[
+  {
+    "code": "id",
+    "name": "Bahasa Indonesia",
+    "flag": "🇮🇩",
+    "file": "id.json"
+  },
+  {
+    "code": "en",
+    "name": "English",
+    "flag": "🇬🇧",
+    "file": "en.json"
+  }
+]

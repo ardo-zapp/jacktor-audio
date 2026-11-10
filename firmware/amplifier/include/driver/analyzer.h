@@ -52,6 +52,8 @@ float    analyzerGetDiagThrL();
 float    analyzerGetDiagThrR();
 float    analyzerGetDcOffsetL();
 float    analyzerGetDcOffsetR();
+float    analyzerGetP2pL();
+float    analyzerGetP2pR();
 uint32_t analyzerGetSamplesR();
 uint32_t analyzerGetSamplesL();
 int16_t  analyzerGetRawR0();

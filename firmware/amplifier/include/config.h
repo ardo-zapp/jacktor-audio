@@ -19,8 +19,15 @@
 
 
 // ============================================================================
-//  DS18B20 (heatsink sensor)
+//  DS18B20 Multi-Sensor 1-Wire Bus (Class AB, Class D, SMPS)
+// ============================================================================
 #define DS18B20_PIN            27
+
+// Default 64-bit OneWire ROM Addresses (persisted in NVS; fallback defaults below).
+// Detected physical Stereo (Class AB) sensor ROM on GPIO 27: 0x1024020001892428ULL
+#define DS18B20_ADDR_CLASS_AB_DEFAULT  0x1024020001892428ULL
+#define DS18B20_ADDR_CLASS_D_DEFAULT   0x0000000000000000ULL
+#define DS18B20_ADDR_SMPS_DEFAULT      0x0000000000000000ULL
 
 //  Firmware meta
 // ============================================================================
@@ -103,7 +110,7 @@
 //  - 1 Hz SQW is used for pacing telemetry during STANDBY
 // ============================================================================
 #define RTC_I2C_ADDR             0x68
-#define RTC_SQW_PIN              35     // Input SQW 1 Hz
+#define RTC_SQW_PIN              36     // Input SQW 1 Hz (DS3231 SQW)
 #define RTC_SYNC_MIN_OFFS_SEC    2      // Write to RTC only if offset > 2s
 #define RTC_SYNC_MIN_INTERVAL_H  24     // Sync rate limit: 24h
 
@@ -187,8 +194,8 @@
 #define RELAY_SMPS_PIN           14
 #define RELAY_SMPS_ACTIVE_HIGH   1
 
-#define RELAY_AUDIO_PIN          26     // Relay Audio (Active ON for NES/USB DAC/DAP audio programs)
-#define RELAY_AUDIO_ACTIVE_HIGH  1
+#define PWR_LED_PIN              26     // Main power button indicator LED (Active HIGH)
+#define PWR_LED_ACTIVE_HIGH      1
 
 #define SPEAKER_POWER_SWITCH_PIN 25
 
@@ -256,7 +263,7 @@
 //  - Do not power off the protector supply from firmware; only report the fault
 //  - Fault if the LED remains off >= SPK_PROTECT_FAULT_MS
 // ============================================================================
-#define SPK_PROTECT_LED_PIN      34
+#define SPK_PROTECT_LED_PIN      35           // GPIO 35 (Speaker Protect LED Monitor)
 #define SPK_PROTECT_FAULT_MS     2000
 #define SPK_PROTECT_ACTIVE_HIGH  0
 #define SPK_PROTECT_ARM_MS       6000
@@ -264,15 +271,14 @@
 
 // ============================================================================
 //  Analyzer (Jacktor Audio FFT) — internal I2S ADC
-//  - Internal ADC via I2S driver (GPIO36/ADC1_CH0)
 //  - Sample block 1024 @ 44.1 kHz -> 8/16/24/32/64 log-cutoff bands
 //  - Automatically disabled during STANDBY via analyzerSetEnabled(false)
 // ============================================================================
 #define I2S_PORT                 I2S_NUM_0
 #define I2S_USE_BUILTIN_ADC      1            // use internal ADC
-#define I2S_ADC_GPIO_R           36           // ADC1_CH0 (Audio In R / GPIO36)
-#define I2S_ADC_GPIO_L           39           // ADC1_CH3 (Audio In L / GPIO39)
-#define I2S_ADC_GPIO             36           // Primary Channel default
+#define I2S_ADC_GPIO_R           39           // Audio In R / GPIO 39 (ADC1_CH3)
+#define I2S_ADC_GPIO_L           34           // Audio In L / GPIO 34 (ADC1_CH6)
+#define I2S_ADC_GPIO             34           // Primary Channel default (Left)
 
 // FFT/Analyzer parameters (reference; runtime uses ANALYZER_DEFAULT_*)
 #define ANA_N                    1024
@@ -312,7 +318,7 @@
 // ============================================================================
 #define OTA_MAX_BIN_SIZE         (1024*1024)  // 1 MiB safe limit
 #ifndef OTA_ENABLE
-#define OTA_ENABLE               1
+#define OTA_ENABLE               0
 #endif
 
 

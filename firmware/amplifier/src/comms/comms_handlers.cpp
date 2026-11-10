@@ -6,15 +6,93 @@
 #include "power.h"
 #include "sensors.h"
 #include "analyzer.h"
+#include "buzzer.h"
 #include "main.h"
 #include "gaia.h"
 
 #include "cJSON.h"
 #include "i2cdev.h"
 #include "driver/i2c_master.h"
+#include <algorithm>
 #include <vector>
 #include <cmath>
 #include <cstring>
+
+static void executeTempScan() {
+    TempSensorDeviceInfo devs[8];
+    size_t count = sensorsScan1WireBus(devs, 8);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "type", "temp_scan_result");
+    cJSON_AddBoolToObject(resp, "success", true);
+
+    cJSON *arr = cJSON_CreateArray();
+    cJSON_AddItemToObject(resp, "devices", arr);
+    for (size_t i = 0; i < count; i++) {
+        cJSON *d = cJSON_CreateObject();
+        char romHex[24];
+        snprintf(romHex, sizeof(romHex), "%016llX", (unsigned long long)devs[i].rom);
+        cJSON_AddStringToObject(d, "rom", romHex);
+        if (!std::isnan(devs[i].tempC)) {
+            cJSON_AddNumberToObject(d, "temp", roundf(devs[i].tempC * 10.0f) / 10.0f);
+        } else {
+            cJSON_AddNullToObject(d, "temp");
+        }
+        const char *roleStr = "unassigned";
+        if (devs[i].role == TEMP_ROLE_CLASS_AB) roleStr = "class_ab";
+        else if (devs[i].role == TEMP_ROLE_CLASS_D) roleStr = "class_d";
+        else if (devs[i].role == TEMP_ROLE_SMPS) roleStr = "smps";
+        cJSON_AddStringToObject(d, "role", roleStr);
+        cJSON_AddItemToArray(arr, d);
+    }
+
+    cJSON *assigned = cJSON_CreateObject();
+    cJSON_AddItemToObject(resp, "assigned", assigned);
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%016llX", (unsigned long long)sensorsGetRomClassAB());
+    cJSON_AddStringToObject(assigned, "class_ab", buf);
+    snprintf(buf, sizeof(buf), "%016llX", (unsigned long long)sensorsGetRomClassD());
+    cJSON_AddStringToObject(assigned, "class_d", buf);
+    snprintf(buf, sizeof(buf), "%016llX", (unsigned long long)sensorsGetRomSmps());
+    cJSON_AddStringToObject(assigned, "smps", buf);
+
+    char *out = cJSON_PrintUnformatted(resp);
+    if (out) {
+        if (takeUartTxMutex(pdMS_TO_TICKS(500))) {
+            debugSerial.println(out);
+            giveUartTxMutex();
+        }
+        free(out);
+    }
+    cJSON_Delete(resp);
+}
+
+static TempSensorRole parseRoleStr(const char* s) {
+    if (!s) return TEMP_ROLE_CLASS_AB;
+    if (strstr(s, "ab") || strstr(s, "AB")) return TEMP_ROLE_CLASS_AB;
+    if (strstr(s, "d") || strstr(s, "D")) return TEMP_ROLE_CLASS_D;
+    if (strstr(s, "smps") || strstr(s, "SMPS")) return TEMP_ROLE_SMPS;
+    return TEMP_ROLE_CLASS_AB;
+}
+
+static void executeTempAssign(const char* roleStr, const char* romHex) {
+    TempSensorRole role = parseRoleStr(roleStr);
+    uint64_t rom = 0;
+    if (romHex && romHex[0]) {
+        rom = strtoull(romHex, NULL, 16);
+    }
+    sensorsAssignTempRom(role, rom);
+    executeTempScan();
+    forceTel = true;
+}
+
+static void executeTempSwap(const char* r1Str, const char* r2Str) {
+    TempSensorRole r1 = parseRoleStr(r1Str);
+    TempSensorRole r2 = parseRoleStr(r2Str);
+    sensorsSwapTempRoles(r1, r2);
+    executeTempScan();
+    forceTel = true;
+}
 
 void handleShellCommand(const std::string& line) {
     if (line.empty()) return;
@@ -41,9 +119,13 @@ void handleShellCommand(const std::string& line) {
         snprintf(buf, sizeof(buf), "Uptime: %lu mins | Peak: %.1fC | Fault: %s",
                  (unsigned long)stateGetTotalMinutes(), stateGetPeakTemp(), stateGetLastFault());
         debugSerial.println(buf);
-    } else if (equalsIgnoreCase(line.c_str(), "reboot")) {
+        sendStatsReport();
+    } else if (equalsIgnoreCase(line.c_str(), "reboot") || equalsIgnoreCase(line.c_str(), "reset")) {
         debugSerial.println("Rebooting...");
         stateRequestReboot(100);
+    } else if (equalsIgnoreCase(line.c_str(), "qcc_reboot") || equalsIgnoreCase(line.c_str(), "qcc-reboot")) {
+        gaiaSendCommand(CMD_DEVICE_RESET);
+        debugSerial.println("QCC5125 Reboot Triggered");
     } else if (line.rfind("pwr-on", 0) == 0 || line.rfind("pwr on", 0) == 0) {
         bool bypass = (line.find("--bypass") != std::string::npos || line.find(" -b") != std::string::npos);
         if (bypass) {
@@ -53,29 +135,166 @@ void handleShellCommand(const std::string& line) {
             debugSerial.println("Power ON");
         }
         powerSetMainRelay(true, PowerChangeReason::Command);
+        forceTel = true;
     } else if (equalsIgnoreCase(line.c_str(), "pwr off") || line == "pwr-off") {
         powerSetMainRelay(false, PowerChangeReason::Command);
         debugSerial.println("Power OFF");
-    } else if (equalsIgnoreCase(line.c_str(), "spk-on") || equalsIgnoreCase(line.c_str(), "spk on")) {
+        forceTel = true;
+    } else if (equalsIgnoreCase(line.c_str(), "spk-on") || equalsIgnoreCase(line.c_str(), "spk on") || equalsIgnoreCase(line.c_str(), "spk-pwr-on")) {
         powerSetSpeakerPower(true);
         debugSerial.println("Speaker Protector ON");
-    } else if (equalsIgnoreCase(line.c_str(), "spk-off") || equalsIgnoreCase(line.c_str(), "spk off")) {
+        forceTel = true;
+    } else if (equalsIgnoreCase(line.c_str(), "spk-off") || equalsIgnoreCase(line.c_str(), "spk off") || equalsIgnoreCase(line.c_str(), "spk-pwr-off")) {
         powerSetSpeakerPower(false);
         debugSerial.println("Speaker Protector OFF");
+        forceTel = true;
     } else if (equalsIgnoreCase(line.c_str(), "bt-on") || equalsIgnoreCase(line.c_str(), "bt on")) {
         powerSetBtEnabled(true);
         debugSerial.println("Bluetooth ON");
+        forceTel = true;
     } else if (equalsIgnoreCase(line.c_str(), "bt-off") || equalsIgnoreCase(line.c_str(), "bt off")) {
         powerSetBtEnabled(false);
         debugSerial.println("Bluetooth OFF");
+        forceTel = true;
     } else if (equalsIgnoreCase(line.c_str(), "audio-on") || line == "audio-relay-on") {
         powerSetAudioRelay(true);
         debugSerial.println("Audio Relay ON");
+        forceTel = true;
     } else if (equalsIgnoreCase(line.c_str(), "audio-off") || line == "audio-relay-off") {
         powerSetAudioRelay(false);
         debugSerial.println("Audio Relay OFF");
+        forceTel = true;
+    } else if (equalsIgnoreCase(line.c_str(), "smps-on")) {
+        stateSetSmpsBypass(false);
+        debugSerial.println("SMPS Protection ON");
+        forceTel = true;
+    } else if (equalsIgnoreCase(line.c_str(), "smps-off")) {
+        stateSetSmpsBypass(true);
+        debugSerial.println("SMPS Protection BYPASS");
+        forceTel = true;
+    } else if (line.rfind("smps-cutoff", 0) == 0) {
+        float v = 0.0f;
+        if (sscanf(line.c_str(), "smps-cutoff %f", &v) == 1 && v >= 20.0f && v <= 65.0f) {
+            stateSetSmpsCutoffV(v);
+            forceTel = true;
+        }
+    } else if (equalsIgnoreCase(line.c_str(), "fan-auto")) {
+        stateSetFanMode(FanMode::AUTO);
+        forceTel = true;
+    } else if (equalsIgnoreCase(line.c_str(), "fan-custom")) {
+        stateSetFanMode(FanMode::CUSTOM);
+        forceTel = true;
+    } else if (line.rfind("fan-duty", 0) == 0) {
+        int duty = 0;
+        if (sscanf(line.c_str(), "fan-duty %d", &duty) == 1) {
+            duty = std::clamp(duty, 0, 1023);
+            stateSetFanCustomDuty((uint16_t)duty);
+            forceTel = true;
+        }
+    } else if (line.rfind("sleep", 0) == 0) {
+        int mins = 0;
+        if (sscanf(line.c_str(), "sleep %d", &mins) == 1 && mins >= 0) {
+            powerSetSleepTimer((uint16_t)mins);
+            forceTel = true;
+        }
+    } else if (line.rfind("ana-mode", 0) == 0) {
+        char mBuf[16] = "";
+        if (sscanf(line.c_str(), "ana-mode %15s", mBuf) == 1) {
+            analyzerSetMode(mBuf);
+            analyzerSaveToNvs();
+            sendAnalyzerSnapshot("set");
+            forceTel = true;
+        }
+    } else if (line.rfind("ana-bands", 0) == 0) {
+        int b = 0;
+        if (sscanf(line.c_str(), "ana-bands %d", &b) == 1) {
+            analyzerSetBands((uint8_t)b);
+            analyzerSaveToNvs();
+            sendAnalyzerSnapshot("set");
+            forceTel = true;
+        }
+    } else if (equalsIgnoreCase(line.c_str(), "ana-get")) {
+        sendAnalyzerSnapshot("get");
+    } else if (line.rfind("l-gain", 0) == 0 || line.rfind("gain-l", 0) == 0) {
+        float val = 1.0f;
+        if (sscanf(line.c_str(), "%*s %f", &val) == 1) {
+            analyzerSetGainL(val);
+            sendAnalyzerSnapshot("set_params");
+            forceTel = true;
+        }
+    } else if (line.rfind("r-gain", 0) == 0 || line.rfind("gain-r", 0) == 0) {
+        float val = 1.0f;
+        if (sscanf(line.c_str(), "%*s %f", &val) == 1) {
+            analyzerSetGainR(val);
+            sendAnalyzerSnapshot("set_params");
+            forceTel = true;
+        }
+    } else if (line.rfind("gain ", 0) == 0) {
+        float val = 1.0f;
+        if (sscanf(line.c_str(), "gain %f", &val) == 1) {
+            analyzerSetGainL(val);
+            analyzerSetGainR(val);
+            sendAnalyzerSnapshot("set_params");
+            forceTel = true;
+        }
+    } else if (line.rfind("l-noise", 0) == 0 || line.rfind("noise-l", 0) == 0) {
+        float val = 0.0f;
+        if (sscanf(line.c_str(), "%*s %f", &val) == 1) {
+            analyzerSetNoiseL(val);
+            sendAnalyzerSnapshot("set_params");
+            forceTel = true;
+        }
+    } else if (line.rfind("r-noise", 0) == 0 || line.rfind("noise-r", 0) == 0) {
+        float val = 0.0f;
+        if (sscanf(line.c_str(), "%*s %f", &val) == 1) {
+            analyzerSetNoiseR(val);
+            sendAnalyzerSnapshot("set_params");
+            forceTel = true;
+        }
+    } else if (line.rfind("noise ", 0) == 0) {
+        float val = 0.0f;
+        if (sscanf(line.c_str(), "noise %f", &val) == 1) {
+            analyzerSetNoiseL(val);
+            analyzerSetNoiseR(val);
+            sendAnalyzerSnapshot("set_params");
+            forceTel = true;
+        }
     } else if (equalsIgnoreCase(line.c_str(), "calibrate")) {
         analyzerCalibrateAdc();
+        sendAnalyzerSnapshot("calibrated");
+        forceTel = true;
+    } else if (line.rfind("setchannel", 0) == 0 || line.rfind("chmode", 0) == 0) {
+        int ch = 0;
+        char modeStr[32] = {0};
+        if (sscanf(line.c_str(), "%*s %31s", modeStr) == 1) {
+            if (strcasecmp(modeStr, "left") == 0 || strcmp(modeStr, "1") == 0) ch = 1;
+            else if (strcasecmp(modeStr, "right") == 0 || strcmp(modeStr, "2") == 0) ch = 2;
+            else if (strcasecmp(modeStr, "mono") == 0 || strcmp(modeStr, "3") == 0) ch = 3;
+            else ch = 0;
+        }
+        stateSetChannelMode(ch);
+        uint8_t payload[2] = { 0, static_cast<uint8_t>(ch) };
+        gaiaSendCommand(CMD_SET_TWS_AUDIO_ROUTING, payload, 2);
+        forceTel = true;
+        debugSerial.printf("OK: Channel mode set to %d (%s)\n", ch, getTwsChannelName(ch));
+    } else if (equalsIgnoreCase(line.c_str(), "factory-reset") || equalsIgnoreCase(line.c_str(), "factory_reset") ||
+               equalsIgnoreCase(line.c_str(), "nvs-reset") || equalsIgnoreCase(line.c_str(), "nvs_reset")) {
+        debugSerial.println("Factory Reset: Erasing all NVS data to defaults and rebooting...");
+        appPerformFactoryReset("FACTORY RESET (SHELL)", "uart");
+    } else if (equalsIgnoreCase(line.c_str(), "alarm_stop") || equalsIgnoreCase(line.c_str(), "alarm-stop")) {
+        powerSetAlarmsSilenced(true);
+        forceTel = true;
+    } else if (equalsIgnoreCase(line.c_str(), "tone-click") || equalsIgnoreCase(line.c_str(), "buzz-click")) {
+        buzzerClick();
+    } else if (equalsIgnoreCase(line.c_str(), "tone-test") || equalsIgnoreCase(line.c_str(), "buzz-test")) {
+        static const BuzzStep testSeq[] = {
+            {880, 90, BUZZER_DUTY_DEFAULT},
+            {0, 40, 0},
+            {1320, 90, BUZZER_DUTY_DEFAULT},
+            {0, 40, 0},
+            {1760, 140, BUZZER_DUTY_DEFAULT}
+        };
+        buzzerCustomSequence(testSeq, sizeof(testSeq) / sizeof(testSeq[0]));
     } else if (equalsIgnoreCase(line.c_str(), "scan")) {
         debugSerial.println("Scanning I2C...");
         i2c_master_bus_handle_t bus_handle = NULL;
@@ -88,6 +307,16 @@ void handleShellCommand(const std::string& line) {
         }
     } else if (equalsIgnoreCase(line.c_str(), "deviceinfo")) {
         handleCmdDeviceInfo(nullptr);
+    } else if (equalsIgnoreCase(line.c_str(), "temp-scan") || line == "tempscan") {
+        executeTempScan();
+    } else if (line.rfind("temp-assign", 0) == 0) {
+        char roleBuf[32] = "", romBuf[32] = "";
+        sscanf(line.c_str(), "temp-assign %31s %31s", roleBuf, romBuf);
+        executeTempAssign(roleBuf, romBuf);
+    } else if (line.rfind("temp-swap", 0) == 0) {
+        char r1[32] = "", r2[32] = "";
+        sscanf(line.c_str(), "temp-swap %31s %31s", r1, r2);
+        executeTempSwap(r1, r2);
     } else if (equalsIgnoreCase(line.c_str(), "setup") || equalsIgnoreCase(line.c_str(), "selftest")) {
         cJSON *b = cJSON_CreateBool(true);
         handleCmdSelftest(b);
@@ -246,8 +475,8 @@ void handleJsonLine(const std::string &line, uart_port_t srcPort) {
       {"deviceinfo", "deviceinfo : Display detailed MCU, sensor, and hardware status"},
       {"stats", "stats : Display runtime uptime, peak temperature, and fault history"},
       {"scan", "scan : Scan I2C bus for connected hardware devices"},
-      {"reset", "reset : Perform software reset / reboot of the amplifier MCU"},
-      {"nvs-reset", "nvs-reset : Erase and restore non-volatile storage (NVS) defaults"}
+      {"reboot", "reboot : Perform software reboot of the amplifier ESP32 MCU"},
+      {"factory-reset", "factory-reset : Factory reset (erase all NVS data to defaults and auto-reboot)"}
     };
 
     static const CommandCategoryDef amp_categories[] = {
@@ -351,20 +580,52 @@ void handleJsonLine(const std::string &line, uart_port_t srcPort) {
   if ((item = cJSON_GetObjectItem(cmd, "fan_mode")) != NULL) handleCmdFanMode(item);
   if ((item = cJSON_GetObjectItem(cmd, "fan_duty")) != NULL) handleCmdFanDuty(item);
   if ((item = cJSON_GetObjectItem(cmd, "rtc_set_epoch")) != NULL) handleCmdRtcSetEpoch(item);
-  if ((item = cJSON_GetObjectItem(cmd, "ota_begin")) != NULL) handleCmdOtaBegin(item);
-  if ((item = cJSON_GetObjectItem(cmd, "ota_write")) != NULL) handleCmdOtaWrite(item);
-  if ((item = cJSON_GetObjectItem(cmd, "ota_end")) != NULL) handleCmdOtaEnd(item);
-  if ((item = cJSON_GetObjectItem(cmd, "ota_abort")) != NULL) handleCmdOtaAbort(item);
   if ((item = cJSON_GetObjectItem(cmd, "tone")) != NULL) handleCmdTone(item);
   if ((item = cJSON_GetObjectItem(cmd, "buzz")) != NULL) handleCmdTone(item);
-  if ((item = cJSON_GetObjectItem(cmd, "nvs_reset")) != NULL) handleCmdNvsReset(item);
+  if ((item = cJSON_GetObjectItem(cmd, "buzz_enabled")) != NULL) {
+    if (cJSON_IsBool(item)) {
+      buzzSetEnabled(cJSON_IsTrue(item));
+      sendAckOkBool("buzz_enabled", cJSON_IsTrue(item), true);
+      forceTel = true;
+    }
+  }
+  if ((item = cJSON_GetObjectItem(cmd, "buzz_volume")) != NULL) {
+    if (cJSON_IsNumber(item)) {
+      int vol = std::clamp((int)std::lround(item->valuedouble), 0, 100);
+      buzzerSetVolume((uint8_t)vol);
+      sendAckOkInt("buzz_volume", vol, true);
+      forceTel = true;
+    }
+  }
+  if ((item = cJSON_GetObjectItem(cmd, "nvs_reset")) != NULL) handleCmdFactoryReset(item);
   if ((item = cJSON_GetObjectItem(cmd, "factory_reset")) != NULL) handleCmdFactoryReset(item);
+  if ((item = cJSON_GetObjectItem(cmd, "mcu_reboot")) != NULL) {
+    if (cJSON_IsTrue(item)) {
+      sendAckOkBool("mcu_reboot", true, true);
+      stateRequestReboot(100);
+    }
+  }
   if ((item = cJSON_GetObjectItem(cmd, "alarm_stop")) != NULL) handleCmdAlarmStop(item);
   if ((item = cJSON_GetObjectItem(cmd, "btn_lock")) != NULL) handleCmdBtnLock(item);
   if ((item = cJSON_GetObjectItem(cmd, "bt_continue")) != NULL) handleCmdBtContinue(item);
   if ((item = cJSON_GetObjectItem(cmd, "stats")) != NULL) handleCmdGetStats(item);
   if ((item = cJSON_GetObjectItem(cmd, "ping")) != NULL) handleCmdPing(item);
   if ((item = cJSON_GetObjectItem(cmd, "deviceinfo")) != NULL) handleCmdDeviceInfo(item);
+  if ((item = cJSON_GetObjectItem(cmd, "temp_scan")) != NULL) { if (cJSON_IsTrue(item)) executeTempScan(); }
+  if ((item = cJSON_GetObjectItem(cmd, "temp_assign")) != NULL) {
+      cJSON *rItem = cJSON_GetObjectItem(item, "role");
+      cJSON *mItem = cJSON_GetObjectItem(item, "rom");
+      if (rItem && mItem && rItem->valuestring && mItem->valuestring) {
+          executeTempAssign(rItem->valuestring, mItem->valuestring);
+      }
+  }
+  if ((item = cJSON_GetObjectItem(cmd, "temp_swap")) != NULL) {
+      cJSON *r1Item = cJSON_GetObjectItem(item, "role1");
+      cJSON *r2Item = cJSON_GetObjectItem(item, "role2");
+      if (r1Item && r2Item && r1Item->valuestring && r2Item->valuestring) {
+          executeTempSwap(r1Item->valuestring, r2Item->valuestring);
+      }
+  }
   if ((item = cJSON_GetObjectItem(cmd, "setup")) != NULL) handleCmdSelftest(item);
   if ((item = cJSON_GetObjectItem(cmd, "selftest")) != NULL) handleCmdSelftest(item);
 
@@ -376,7 +637,7 @@ void handleJsonLine(const std::string &line, uart_port_t srcPort) {
   if ((item = cJSON_GetObjectItem(cmd, "volup")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendAvrcpControl(AVRCP_VOLUME_UP); }
   if ((item = cJSON_GetObjectItem(cmd, "voldown")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendAvrcpControl(AVRCP_VOLUME_DOWN); }
   if ((item = cJSON_GetObjectItem(cmd, "getpreset")) != NULL) { gaiaSendCommand(CMD_GET_EQ_CONTROL); }
-  if ((item = cJSON_GetObjectItem(cmd, "setpreset")) != NULL) { uint8_t p = (uint8_t)item->valuedouble; gaiaSendCommand(CMD_SET_EQ_CONTROL, &p, 1); }
+  if ((item = cJSON_GetObjectItem(cmd, "setpreset")) != NULL) { uint8_t p = (uint8_t)item->valuedouble; stateSetEqPreset(p); gaiaSendCommand(CMD_SET_EQ_CONTROL, &p, 1); forceTel = true; }
   if ((item = cJSON_GetObjectItem(cmd, "getvolume")) != NULL) { gaiaSendCommand(CMD_GET_VOLUME); }
   if ((item = cJSON_GetObjectItem(cmd, "changevolume")) != NULL) { uint8_t vol = (uint8_t)item->valuedouble; gaiaSendCommand(CMD_CHANGE_VOLUME, &vol, 1); }
   if ((item = cJSON_GetObjectItem(cmd, "enterpairing")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_ENTER_BLUETOOTH_PAIRING_MODE); }
@@ -385,14 +646,24 @@ void handleJsonLine(const std::string &line, uart_port_t srcPort) {
   if ((item = cJSON_GetObjectItem(cmd, "apiver")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_GET_API_VERSION); }
   if ((item = cJSON_GetObjectItem(cmd, "appver")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_GET_APPLICATION_VERSION); }
   if ((item = cJSON_GetObjectItem(cmd, "reboot")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_DEVICE_RESET); }
+  if ((item = cJSON_GetObjectItem(cmd, "qcc_reboot")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_DEVICE_RESET); }
   if ((item = cJSON_GetObjectItem(cmd, "factoryreset")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_FACTORY_DEFAULT_RESET); }
   if ((item = cJSON_GetObjectItem(cmd, "deletepdl")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_DELETE_PDL); }
   if ((item = cJSON_GetObjectItem(cmd, "getbtname")) != NULL) { if (cJSON_IsTrue(item)) { uint8_t payload[2] = {0x00, 0xC8}; gaiaSendCommand(CMD_RETRIEVE_PS_KEY, payload, 2); } }
   if ((item = cJSON_GetObjectItem(cmd, "getbtpin")) != NULL) { if (cJSON_IsTrue(item)) { uint8_t payload[2] = {0x00, 0xFA}; gaiaSendCommand(CMD_RETRIEVE_PS_KEY, payload, 2); } }
   if ((item = cJSON_GetObjectItem(cmd, "getbass")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_GET_BASS_BOOST_CONTROL); }
-  if ((item = cJSON_GetObjectItem(cmd, "setbass")) != NULL) { uint8_t b = (uint8_t)item->valuedouble; gaiaSendCommand(CMD_SET_BASS_BOOST_CONTROL, &b, 1); }
+  if ((item = cJSON_GetObjectItem(cmd, "setbass")) != NULL) { uint8_t b = (uint8_t)item->valuedouble; stateSetBassBoost(b != 0); gaiaSendCommand(CMD_SET_BASS_BOOST_CONTROL, &b, 1); forceTel = true; }
   if ((item = cJSON_GetObjectItem(cmd, "get3d")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_GET_3D_ENHANCEMENT_CONTROL); }
-  if ((item = cJSON_GetObjectItem(cmd, "set3d")) != NULL) { uint8_t b = (uint8_t)item->valuedouble; gaiaSendCommand(CMD_SET_3D_ENHANCEMENT_CONTROL, &b, 1); }
+  if ((item = cJSON_GetObjectItem(cmd, "set3d")) != NULL) { uint8_t b = (uint8_t)item->valuedouble; stateSet3dAudio(b != 0); gaiaSendCommand(CMD_SET_3D_ENHANCEMENT_CONTROL, &b, 1); forceTel = true; }
+  if ((item = cJSON_GetObjectItem(cmd, "getchannel")) != NULL) { if (cJSON_IsTrue(item)) { uint8_t payload[1] = {0}; gaiaSendCommand(CMD_GET_TWS_AUDIO_ROUTING, payload, 1); } }
+  if ((item = cJSON_GetObjectItem(cmd, "setchannel")) != NULL) {
+    uint8_t ch = (uint8_t)item->valuedouble;
+    if (ch > 3) ch = 0;
+    stateSetChannelMode(ch);
+    uint8_t payload[2] = { 0, ch };
+    gaiaSendCommand(CMD_SET_TWS_AUDIO_ROUTING, payload, 2);
+    forceTel = true;
+  }
   if ((item = cJSON_GetObjectItem(cmd, "getusereq")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_GET_USER_EQ_CONTROL); }
   if ((item = cJSON_GetObjectItem(cmd, "setusereq")) != NULL) { uint8_t u = (uint8_t)item->valuedouble; gaiaSendCommand(CMD_SET_USER_EQ_CONTROL, &u, 1); }
   if ((item = cJSON_GetObjectItem(cmd, "getdevicename")) != NULL) { if (cJSON_IsTrue(item)) gaiaSendCommand(CMD_GET_DEVICE_NAME); }

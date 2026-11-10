@@ -158,7 +158,7 @@ static void applyBtHardware(uint32_t now) {
     btHwOn = shouldHwOn;
     if (shouldHwOn) {
       btPowerOnMs = millis();
-      qccProtectArmUntilMs = btPowerOnMs + 2000U;
+      qccProtectArmUntilMs = btPowerOnMs + 2500U;
       qccProtectLastChangeMs = btPowerOnMs;
       qccProtectOk = powerHwReadBtReady();
       qccProtectActiveLogged = false;
@@ -341,7 +341,7 @@ void powerCompleteSelfTest() {
   smpsSoftstartUntilMs = 0;
   smpsValidSince = millis();
   spkProtectArmUntilMs = millis() + SPK_PROTECT_ARM_MS;
-  qccProtectArmUntilMs = millis() + 2000U;
+  qccProtectArmUntilMs = millis() + 2500U;
   qccProtectLastChangeMs = millis();
   qccProtectOk = powerHwReadBtReady();
 
@@ -429,7 +429,7 @@ void powerTick(const uint32_t now) {
           btHwOn = true;
           btPowerOnMs = now;
           btHardCycling = false;
-          qccProtectArmUntilMs = now + 2000U;
+          qccProtectArmUntilMs = now + 2500U;
           qccProtectLastChangeMs = now;
           qccProtectOk = powerHwReadBtReady();
           qccProtectActiveLogged = false;
@@ -510,7 +510,6 @@ void powerTick(const uint32_t now) {
       if (audioRelayOn) {
           audioRelayOn = false;
           powerHwSetRelayAudio(false);
-          gpio_set_level((gpio_num_t)RELAY_AUDIO_PIN, RELAY_AUDIO_ACTIVE_HIGH ? 0 : 1);
       }
       if (spkHwOn) {
           spkHwOn = false;
@@ -558,7 +557,7 @@ void powerTick(const uint32_t now) {
       }
 
       const bool bypassSmps = stateSmpsBypass() || runtimeBypassActive;
-      bool isLv = (!bypassSmps && vSmps > 0.0f && vSmps < stateSmpsCutoffV()) || (v_stby > 0.0f && v_stby < stateStbyLowThresh());
+      bool isLv = (!bypassSmps && vSmps > 0.0f && vSmps < stateSmpsCutoffV());
       if (isLv != globalLowVoltage) {
           globalLowVoltage = isLv;
           if (globalLowVoltage) {
@@ -665,7 +664,7 @@ void powerTick(const uint32_t now) {
     bool ok = powerHwReadSpkProtect();
     if (ok && !protectFaultLogged) {
       protectFaultLogged = true;
-      commsLog("info", "speaker_protector_active_gpio34_ok");
+      commsLog("info", "speaker_protector_active_gpio35_ok");
     }
     if (ok != spkProtectOk) {
       spkProtectOk = ok;
@@ -675,7 +674,7 @@ void powerTick(const uint32_t now) {
         if (now - protectLastChangeMs >= SPK_PROTECT_FAULT_MS) {
             protectFaultLatched = true;
             stateSetLastFault("speaker_protector_trip");
-            commsLog("error", "speaker_protector_fault_gpio34_low");
+            commsLog("error", "speaker_protector_fault_gpio35_low");
             if (!alarmsSilenced) {
                 buzzStop();
                 buzzPattern(BuzzPatternId::PROTECT_LONG);
@@ -712,7 +711,7 @@ void powerTick(const uint32_t now) {
         qccProtectLastChangeMs = now;
       } else {
         if (!qccProtectOk && !qccProtectFaultLatched) {
-          if (now - qccProtectLastChangeMs >= 800U) {
+          if (now - qccProtectLastChangeMs >= 1000U) {
             qccProtectFaultLatched = true;
             stateSetLastFault("qcc_power_detect_trip");
             commsLog("error", "qcc_power_detect_fault_gpio5_low");
@@ -854,7 +853,6 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
 
     // 2. Cut audio input relays
     powerHwSetRelayAudio(false);
-    gpio_set_level((gpio_num_t)RELAY_AUDIO_PIN, RELAY_AUDIO_ACTIVE_HIGH ? 0 : 1);
 
     // 3. Cut SMPS main power relay unconditionally
     powerHwSetRelaySmps(false);
@@ -892,12 +890,13 @@ void powerSetMainRelay(bool on, PowerChangeReason reason) {
     otpLatched = false;
     smpsHwFaultLatched = false;
     spkProtectArmUntilMs = millis() + SMPS_SOFTSTART_MS + SPK_PROTECT_ARM_MS;
-    qccProtectArmUntilMs = millis() + SMPS_SOFTSTART_MS + 2000U;
+    qccProtectArmUntilMs = millis() + SMPS_SOFTSTART_MS + 2500U;
 
     stateSelfTestStart();
   }
 
   applyBtHardware(millis());
+  commsForceTelemetry();
 }
 
 void powerSetAudioRelay(bool on) {
@@ -935,6 +934,8 @@ void powerSetSpeakerPower(bool on) {
 }
 
 bool powerGetSpeakerPower() { return spkPwr; }
+bool powerSpeakerHwOn() { return spkHwOn; }
+bool powerSpeakerDetectOk() { return powerHwReadSpkProtect(); }
 
 void powerSetAlarmsSilenced(bool silenced) { alarmsSilenced = silenced; }
 bool powerAlarmsSilenced() { return alarmsSilenced; }
@@ -984,7 +985,7 @@ void powerSetBtEnabled(bool en, bool persist) {
     btMode = false;
     btLowSinceMs = 0;
     btLastAuxMs = now;
-    qccProtectArmUntilMs = now + 2000U;
+    qccProtectArmUntilMs = now + 2500U;
     qccProtectLastChangeMs = now;
     qccProtectOk = powerHwReadBtReady();
     if (powerIsOn() && !powerIsInitializing()) {
@@ -997,8 +998,6 @@ void powerSetBtEnabled(bool en, bool persist) {
 
 bool powerBtEnabled() { return btEn; }
 bool powerBtMode() { return btMode; }
-
-void powerSetOtaActive(bool on) { (void)on; }
 
 bool powerSpkProtectFault() {
 #if !FEAT_SPK_PROTECT_ENABLE

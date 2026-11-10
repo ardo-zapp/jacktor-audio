@@ -188,6 +188,7 @@ void commsTick(uint32_t now, bool sqwTick) {
     sendTelemetry(root);
 
     stateSelfTestAcknowledge();
+    forceTel = true;
   }
 }
 

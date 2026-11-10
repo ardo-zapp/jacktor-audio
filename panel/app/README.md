@@ -1,35 +1,61 @@
-# Jacktor Audio — Android Control Panel
+# Jacktor Audio — Android Control Panel Application (`com.jacktor.audiopanel`)
 
-This directory contains the Kotlin Multiplatform Android application for the **Jacktor Audio Control Panel**, replacing the legacy ESP32-S3 hardware panel. All panel system services, Bit-Perfect audio routing, low-latency DSP, and web interfaces are managed natively by the **Jacktor Audio Framework** Magisk/APatch module on Android.
+This directory contains the native **Kotlin Android (Jetpack Compose)** launcher and hardware control application for the **Jacktor Audio Control Panel**, running on the **Realme C15 Qualcomm Edition (`bengal` / `RMX2195`)**.
+
+All kernel USB-serial drivers (`usb-serial.kpm`), `serial-bridge` multiplexing (`127.0.0.1:7777` & `/dev/ttyESP`), Direct ALSA Bit-Perfect audio routing, and Port 80 Jacktor API services are managed at the system level by the **Jacktor Audio Framework** root module.
 
 ---
 
-## 1. Architecture Overview
+## 1. System Role & Architecture
 
-The Android Panel communicates with the **Jacktor Audio ESP32 Amplifier** ECU over **USB Serial (USB-CDC)** at **921,600 bps** using the `usb-serial-for-android` driver engine.
+The Android Panel application operates as both the **Default Home Launcher** and the central digital interface for the amplifier ecosystem:
 
-* **USB Serial Bridge:** Full-duplex asynchronous JSON telemetry stream (`rt` @ 30 Hz for 16-band FFT and VU meters, `hz1` @ 1 Hz for diagnostics).
-* **Industrial UI:** Jetpack Compose & Kotlin Multiplatform UI featuring real-time stereo VU meters, audio spectrum analyzers, amplifier power management, and application launching.
-* **Bit-Perfect Audio Engine:** Directly interfacing with USB Audio DACs and internal audio pipelines at up to 384kHz 32-bit audio.
+```
++-------------------------------------------------------------------------+
+|                  ANDROID CONTROL PANEL APPLICATION                      |
+|  - App ID            : com.jacktor.audiopanel                           |
+|  - Role              : Default System Launcher (CATEGORY_HOME)          |
+|  - UI Stack          : Jetpack Compose + Industrial Dark Theme          |
+|  - Telemetry Stream  : SSE via Jacktor API (Port 80) & TCP 127.0.0.1:7777|
+|  - Bit-Perfect Audio : Direct ALSA Hardware Playback (Up to 384kHz/32b) |
++-------------------------------------------------------------------------+
+                                     |
+                       Multiplexed UART Link @ 921,600 bps
+                                     |
++-------------------------------------------------------------------------+
+|                      AMPLIFIER ECU UNIT (ESP32)                          |
++-------------------------------------------------------------------------+
+```
+
+### Key Architectural Capabilities
+* **Full-Duplex Asynchronous Telemetry**: Receives `rt` audio frames (~30 FPS) for real-time 8/16/32/64-band KissFFT visualization and segmented stereo VU meters, alongside `hz1` diagnostic frames (rail voltages, temperatures, relay status).
+* **Zero-Latency Boot Terminal (`SetupTerminalFragment.kt`)**: Displays a hardware-style pure black boot terminal on amplifier power-on, rendering the self-test diagnosis in real-time and returning cleanly to the main dashboard once self-test passes.
+* **Synchronized Display Power**: Manages screen wake policies automatically (`stay_on_mode=always` when amplifier is active; reverts to standard screen timeout during standby unless 24/7 standby is enabled).
+* **Direct ALSA Bit-Perfect Path**: Bypasses Android's AudioFlinger, streaming unadulterated high-resolution audio directly to the ALSA driver.
 
 ---
 
 ## 2. Directory Structure
 
-* **`androidApp/`**: Native Android application module, UI components, activities, and theme definitions.
-* **`shared/`**: Common Kotlin Multiplatform module containing:
-  * `service/UsbSerialManager.kt`: USB OTG serial communication manager (`921,600 bps`).
-  * `model/TelemetryData.kt`: Serialized data models for amplifier and panel telemetry.
-  * `parser/TelemetryParser.kt`: Real-time JSON parser for incoming amplifier frames.
+* **`androidApp/src/main/java/com/jacktor/audiopanel/`**:
+  * `MainActivity.kt`: Main launcher dashboard, screen wake-lock manager, and power-on terminal overlay host.
+  * `SettingsActivity.kt`: Comprehensive settings interface for `serial-bridge`, relays, Bluetooth QCC5125 GAIA DSP, KissFFT/ADC calibration, thermal PID fan curves, and DS3231 RTC synchronization.
+  * `service/TelemetryConnectionManager.kt`: Non-blocking client for `serial-bridge` (`127.0.0.1:7777`) and Jacktor API SSE stream.
+  * `repository/AmplifierRepository.kt`: Reactive `StateFlow` state holder for real-time FFT, slow telemetry, NVS settings, and boot terminal logs.
+  * `parser/TelemetryParser.kt` & `model/TelemetryData.kt`: `kotlinx.serialization` JSON models and command builders.
+  * `ui/`: Industrial Jetpack Compose UI components (`SetupTerminalFragment.kt`, `SpectrumAnalyzerView.kt`, `StereoVuMeterView.kt`, `TelemetryGaugeView.kt`, `MediaControlToolbar.kt`, `AppDrawerDialog.kt`).
 
 ---
 
-## 3. Building & Installation
-
-To build and install the Android Panel application using Gradle:
+## 3. Building & Deployment
 
 ```bash
 cd panel/app
-./gradlew assembleDebug
-adb install androidApp/build/outputs/apk/debug/androidApp-debug.apk
+./gradlew :androidApp:assembleDebug
 ```
+
+---
+
+## 4. License
+
+Copyright (C) 2026 **Ardo Zapp**. Licensed under **[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)](../../LICENSE)**.

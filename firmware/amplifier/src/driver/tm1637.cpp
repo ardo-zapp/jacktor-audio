@@ -23,9 +23,9 @@ static const char *TAG __attribute__((unused)) = "TM1637";
 #define DISPLAY_ON_BIT 0x08
 #define BRIGHTNESS_MASK 0x07
 
-#define DEFAULT_BIT_DELAY_US 5
-#define TIMING_START_US 2
-#define TIMING_STOP_US 2
+#define DEFAULT_BIT_DELAY_US 25
+#define TIMING_START_US 10
+#define TIMING_STOP_US 10
 
 #define MINUS_SEGMENT 0x40
 #define SPACE_SEGMENT 0x00
@@ -628,22 +628,17 @@ void tm1637Tick() {
         // iteration (~20 ms busy-wait each); now only applied on change.
         applyBrightnessCached((now - standbyStartMs >= 60000) ? 1 : 7);
 
-        static bool lastColonState = false;
         static uint32_t lastTmSqwCount = 0;
+        static uint32_t lastClockUpdate = 0;
         uint32_t currentSqwCount = sensorsSqwGetTickCount();
         bool sqwTick = (currentSqwCount != lastTmSqwCount);
-        if (sqwTick) {
+
+        // Update strictly once per second on physical SQW tick (watchdog only fires if stalled >= 2500 ms)
+        if (sqwTick || (now - lastClockUpdate >= 2500)) {
             lastTmSqwCount = currentSqwCount;
-        }
-
-        bool colonState = sensorsGetColonState();
-        bool colonChanged = (colonState != lastColonState);
-
-        static uint32_t lastClockUpdate = 0;
-        if (sqwTick || colonChanged || (now - lastClockUpdate >= 1000)) {
             lastClockUpdate = now;
-            lastColonState = colonState;
 
+            bool colonState = sensorsGetColonState();
             uint8_t h = 0, m = 0;
             sensorsGetRtcTime(h, m);
             tm1637ShowTime(h, m, colonState);

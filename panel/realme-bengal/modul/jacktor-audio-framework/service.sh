@@ -41,11 +41,26 @@ apply_early_display_and_stayon() {
             if settings get system user_rotation >/dev/null 2>&1; then
                 settings put system accelerometer_rotation 0 2>/dev/null
                 settings put system user_rotation 1 2>/dev/null
-                settings put system screen_off_timeout 2147483647 2>/dev/null
+                
+                STAY_CONF="$CONF_DIR/stay_on_mode"
+                STAY_VAL="normal"
+                [ -f "$STAY_CONF" ] && STAY_VAL="$(cat "$STAY_CONF" 2>/dev/null | tr -d ' \r\n')"
+                if [ "$STAY_VAL" = "always" ] || [ "$STAY_VAL" = "true" ] || [ "$STAY_VAL" = "1" ]; then
+                    settings put system screen_off_timeout 2147483647 2>/dev/null
+                    settings put global stay_on_while_plugged_in 7 2>/dev/null
+                    svc power stayon true 2>/dev/null
+                else
+                    settings put system screen_off_timeout 60000 2>/dev/null
+                    settings put global stay_on_while_plugged_in 0 2>/dev/null
+                    settings put secure doze_always_on 0 2>/dev/null
+                    settings put secure doze_enabled 0 2>/dev/null
+                    settings put secure wake_gesture_enabled 0 2>/dev/null
+                    svc power stayon false 2>/dev/null
+                fi
+
                 settings put system font_scale 0.90 2>/dev/null
                 settings put secure lockscreen.disabled 1 2>/dev/null
                 locksettings set-disabled true 2>/dev/null
-                svc power stayon true 2>/dev/null
                 
                 wm size 720x1460 2>/dev/null
                 wm density 256 2>/dev/null
@@ -75,18 +90,9 @@ log "Android boot completed."
 sleep 2
 
 # ------------------------------------------------------------------------------
-# 2. Wi-Fi ADB Remote Service & SELinux Audio Policies
+# 2. Security Enforcement & SELinux Audio Policies
 # ------------------------------------------------------------------------------
-init_wifi_adb_and_sepolicy() {
-    CURR_PORT="$(getprop service.adb.tcp.port)"
-    if [ "$CURR_PORT" != "5555" ]; then
-        log "Enabling Wi-Fi ADB on port 5555..."
-        setprop persist.adb.tcp.port 5555
-        setprop service.adb.tcp.port 5555
-        stop adbd
-        start adbd
-    fi
-
+init_security_and_sepolicy() {
     # Berikan izin SELinux lengkap untuk Audio HAL, USB DAC, System Suspend, dan GMS (bebas avc: denied)
     if [ -x /data/adb/ap/bin/magiskpolicy ]; then
         /data/adb/ap/bin/magiskpolicy --live \
@@ -126,7 +132,7 @@ init_wifi_adb_and_sepolicy() {
         ip link set rmnet_ipa0 down 2>/dev/null
     fi
 }
-init_wifi_adb_and_sepolicy
+init_security_and_sepolicy
 
 # ------------------------------------------------------------------------------
 # 2b. OpenSSH Server & SFTP Subsystem (PatchedMagiskSSH Engine)
@@ -237,9 +243,13 @@ apply_audio_resampler_and_jitter() {
         log "reduceIoJitter executed."
     fi
 
-    # Doze Whitelist
+    # Doze Whitelist & Permanent Deactivation
+    cmd deviceidle disable 1>/dev/null 2>&1
+    dumpsys deviceidle disable all 1>/dev/null 2>&1
+    dumpsys deviceidle whitelist +com.jacktor.audiopanel 2>/dev/null
+    dumpsys deviceidle whitelist +com.android.shell 2>/dev/null
+
     if [ -f "$CONF_DIR/audio-deviceidle.xml" ] && [ ! -f "$CONF_DIR/run_once_doze" ]; then
-        dumpsys deviceidle disable all 1>/dev/null 2>&1
         target_wl="/data/system/deviceidle.xml"
         if [ -f "$target_wl" ]; then
             cp -f "$target_wl" "${target_wl}.bak_jacktor"
@@ -251,7 +261,6 @@ apply_audio_resampler_and_jitter() {
             rm -f /data/local/tmp/merged_idle.xml
             chmod 600 "$target_wl"
             chown system:system "$target_wl"
-            dumpsys deviceidle enable all 1>/dev/null 2>&1
             touch "$CONF_DIR/run_once_doze"
             log "Doze whitelist merged."
         fi
@@ -260,9 +269,54 @@ apply_audio_resampler_and_jitter() {
 apply_audio_resampler_and_jitter
 
 # ------------------------------------------------------------------------------
+# 4b. 24/7 Anti-Sleep Network & Kernel Wakelock Engine
+# ------------------------------------------------------------------------------
+apply_anti_sleep_and_wakelock() {
+    log "Enforcing 24/7 Anti-Sleep Engine & Kernel Wakelock for WebUI/API Services..."
+
+    # 1. Assert Kernel WakeLock (Prevents CPU from entering suspend when screen is off)
+    echo "jacktor_services" > /sys/power/wake_lock 2>/dev/null
+
+    # 2. Disable Android Doze & Device Idle (Network stack stays 100% active)
+    cmd deviceidle disable 2>/dev/null
+    dumpsys deviceidle disable all 2>/dev/null
+    dumpsys deviceidle whitelist +com.jacktor.audiopanel 2>/dev/null
+    dumpsys deviceidle whitelist +com.android.shell 2>/dev/null
+
+    # 3. Disable all doze timeouts and power-save limitations
+    settings put global device_idle_constants inactive_to=2147483647,sensing_to=0,locating_to=0,location_accuracy=20.0,motion_inactive_to=0,idle_after_inactive_to=0,idle_pending_to=2147483647,max_idle_pending_to=2147483647,idle_pending_factor=2.0,idle_to=2147483647,max_idle_to=2147483647,idle_factor=2.0,min_time_to_alarm=3600000,max_temp_app_allowlist_duration_ms=2147483647,mms_temp_app_allowlist_duration_ms=2147483647,sms_temp_app_allowlist_duration_ms=2147483647,notification_allowlist_duration_ms=2147483647 2>/dev/null
+    settings put secure doze_enabled 0 2>/dev/null
+    settings put secure doze_always_on 0 2>/dev/null
+    settings put secure doze_pulse_on_pick_up 0 2>/dev/null
+    settings put secure doze_pulse_on_long_press 0 2>/dev/null
+    settings put secure doze_pulse_on_double_tap 0 2>/dev/null
+
+    # 4. Wi-Fi Never Sleep & Power Save Off (zero latency drop in standby)
+    settings put global wifi_sleep_policy 2 2>/dev/null
+    settings put global wifi_suspend_optimizations_enabled 0 2>/dev/null
+    settings put global wifi_power_save 0 2>/dev/null
+    settings put global wifi_stay_awake 2 2>/dev/null
+    iw dev wlan0 set power_save off 2>/dev/null
+
+    # 5. Disable Android 14 Cached Apps Freezer
+    settings put global cached_apps_freezer_enabled 0 2>/dev/null
+    device_config put activity_manager_native_boot use_freezer false 2>/dev/null
+    cmd appops set com.jacktor.audiopanel RUN_IN_BACKGROUND allow 2>/dev/null
+    cmd appops set com.jacktor.audiopanel RUN_ANY_IN_BACKGROUND allow 2>/dev/null
+    cmd appops set com.jacktor.audiopanel WAKE_LOCK allow 2>/dev/null
+}
+apply_anti_sleep_and_wakelock
+
+# ------------------------------------------------------------------------------
 # 5. Battery Bypass & Infinite Power Mode (24/7 Amplifier Operation)
 # ------------------------------------------------------------------------------
 apply_battery_bypass() {
+    BYPASS_CONF="$CONF_DIR/battery_bypass"
+    if [ -f "$BYPASS_CONF" ] && [ "$(cat "$BYPASS_CONF" 2>/dev/null | tr -d ' \r\n')" = "false" ]; then
+        log "Battery Bypass is disabled in configuration, keeping standard battery mode."
+        dumpsys battery reset 2>/dev/null
+        return
+    fi
     log "Activating 24/7 Battery Bypass Mode..."
     dumpsys battery set ac 1 2>/dev/null
     dumpsys battery set status 2 2>/dev/null
@@ -278,16 +332,42 @@ apply_battery_bypass
 # 5b. Headunit Display, Resolution & Screen Always-On Configuration
 # ------------------------------------------------------------------------------
 apply_display_and_stayon() {
-    log "Applying landscape display, resolution & screen always-on settings..."
+    log "Applying landscape display, resolution & screen timeout settings..."
     settings put system accelerometer_rotation 0 2>/dev/null
     settings put system user_rotation 1 2>/dev/null
     wm size 720x1460 2>/dev/null
     wm density 256 2>/dev/null
-    svc power stayon true 2>/dev/null
-    settings put system screen_off_timeout 2147483647 2>/dev/null
+    
+    STAY_CONF="$CONF_DIR/stay_on_mode"
+    STAY_VAL="normal"
+    [ -f "$STAY_CONF" ] && STAY_VAL="$(cat "$STAY_CONF" 2>/dev/null | tr -d ' \r\n')"
+    if [ "$STAY_VAL" = "always" ] || [ "$STAY_VAL" = "true" ] || [ "$STAY_VAL" = "1" ]; then
+        svc power stayon true 2>/dev/null
+        settings put global stay_on_while_plugged_in 7 2>/dev/null
+        settings put system screen_off_timeout 2147483647 2>/dev/null
+    else
+        svc power stayon false 2>/dev/null
+        settings put global stay_on_while_plugged_in 0 2>/dev/null
+        settings put system screen_off_timeout 60000 2>/dev/null
+        settings put secure doze_always_on 0 2>/dev/null
+        settings put secure doze_enabled 0 2>/dev/null
+        settings put secure wake_gesture_enabled 0 2>/dev/null
+    fi
     settings put system font_scale 0.90 2>/dev/null
     locksettings set-disabled true 2>/dev/null
     settings put secure lockscreen.disabled 1 2>/dev/null
+
+    # Set Jacktor Panel Launcher as default Home Launcher if installed
+    if pm list packages 2>/dev/null | grep -q "com.jacktor.audiopanel"; then
+        cmd package set-home-activity com.jacktor.audiopanel/.MainActivity >/dev/null 2>&1
+        cmd role add-role-holder android.app.role.HOME com.jacktor.audiopanel >/dev/null 2>&1
+        pm grant com.jacktor.audiopanel android.permission.WRITE_SECURE_SETTINGS >/dev/null 2>&1
+        pm grant com.jacktor.audiopanel android.permission.MEDIA_CONTENT_CONTROL >/dev/null 2>&1
+        cmd notification allow_listener com.jacktor.audiopanel/com.jacktor.audiopanel.service.MediaNotificationListenerService >/dev/null 2>&1
+        touch /data/local/tmp/current_cover.jpg 2>/dev/null
+        chmod 666 /data/local/tmp/current_cover.jpg 2>/dev/null
+        chmod 777 /data/local/tmp 2>/dev/null
+    fi
 }
 apply_display_and_stayon
 
@@ -298,9 +378,9 @@ tune_cpu_and_scheduler() {
     log "Configuring CPU clusters, USB interrupts & power for jitter-free audio..."
 
     CPU_CONF="$CONF_DIR/cpu_profile"
-    TARGET_PROF="performance"
+    TARGET_PROF="balanced"
     [ -f "$CPU_CONF" ] && TARGET_PROF="$(cat "$CPU_CONF" 2>/dev/null | tr -d ' \r\n')"
-    [ -z "$TARGET_PROF" ] && TARGET_PROF="performance" && echo "performance" > "$CPU_CONF" 2>/dev/null
+    [ -z "$TARGET_PROF" ] && TARGET_PROF="balanced" && echo "balanced" > "$CPU_CONF" 2>/dev/null
 
     if [ "$TARGET_PROF" = "balanced" ] || [ "$TARGET_PROF" = "seimbang" ]; then
         for p in /sys/devices/system/cpu/cpufreq/policy*; do
@@ -460,6 +540,39 @@ EOF
 apply_audio_gain_configuration
 
 # ------------------------------------------------------------------------------
+# 6b. Apply Saved Audio Channel Routing Mode (Stereo, Left, Right, Mono)
+# ------------------------------------------------------------------------------
+apply_saved_channel_mode() {
+    local CH_CONF="$CONF_DIR/channel_mode"
+    if [ -f "$CH_CONF" ]; then
+        local CH_VAL="$(cat "$CH_CONF" 2>/dev/null | tr -d ' \r\n')"
+        case "$CH_VAL" in
+            1)
+                settings put secure master_mono 1 2>/dev/null
+                settings put system master_balance -1.0 2>/dev/null
+                log "Audio channel routing restored: LEFT (L-CH to both speakers)"
+                ;;
+            2)
+                settings put secure master_mono 1 2>/dev/null
+                settings put system master_balance 1.0 2>/dev/null
+                log "Audio channel routing restored: RIGHT (R-CH to both speakers)"
+                ;;
+            3)
+                settings put secure master_mono 1 2>/dev/null
+                settings put system master_balance 0.0 2>/dev/null
+                log "Audio channel routing restored: MONO (L+R downmix to both speakers)"
+                ;;
+            *)
+                settings put secure master_mono 0 2>/dev/null
+                settings put system master_balance 0.0 2>/dev/null
+                log "Audio channel routing restored: STEREO (Normal L/R)"
+                ;;
+        esac
+    fi
+}
+apply_saved_channel_mode
+
+# ------------------------------------------------------------------------------
 # 7. USB Mode Engine (Host / Device / Auto - User Configured & Persistent)
 # ------------------------------------------------------------------------------
 apply_saved_usb_mode() {
@@ -550,9 +663,9 @@ apply_saved_usb_mode
 
         # Maintain CPU Governor Profile according to user configuration
         CPU_CONF="$CONF_DIR/cpu_profile"
-        W_PROF="performance"
+        W_PROF="balanced"
         [ -f "$CPU_CONF" ] && W_PROF="$(cat "$CPU_CONF" 2>/dev/null | tr -d ' \r\n')"
-        [ -z "$W_PROF" ] && W_PROF="performance"
+        [ -z "$W_PROF" ] && W_PROF="balanced"
         if [ "$W_PROF" = "balanced" ] || [ "$W_PROF" = "seimbang" ]; then
             TARGET_GOV="schedutil"
         else
@@ -585,15 +698,36 @@ apply_saved_usb_mode
             fi
         done
 
+        # Maintain Anti-Sleep Kernel Wakelock & Network Availability
+        if ! grep -q "jacktor_services" /sys/power/wake_lock 2>/dev/null; then
+            echo "jacktor_services" > /sys/power/wake_lock 2>/dev/null
+        fi
+        if [ "$(dumpsys deviceidle enabled 2>/dev/null)" = "1" ]; then
+            cmd deviceidle disable >/dev/null 2>&1
+        fi
+        iw dev wlan0 set power_save off 2>/dev/null
+
         # Maintain WebUI HTTP Server
         if ! pgrep -f "busybox httpd -p 80 " >/dev/null 2>&1; then
             start_webui_server
         fi
 
-        # Maintain Wi-Fi ADB
-        if [ "$(getprop service.adb.tcp.port)" != "5555" ]; then
-            setprop service.adb.tcp.port 5555
+        # Maintain Serial Telemetry Bridge Daemon
+        if ! pgrep -f "serial-bridge" >/dev/null 2>&1; then
+            start_serial_bridge
         fi
+
+        # Maintain OpenSSH Daemon
+        if ! pgrep -f "sshd" >/dev/null 2>&1 && [ ! -f /data/adb/ssh/no-autostart ]; then
+            "$MODDIR/system/bin/opensshd.init" start >/dev/null 2>&1
+        fi
+
+        # Broadcast Jacktor Audio LAN Discovery Beacon (UDP 42424)
+        IP_WLAN="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}')"
+        if [ -n "$IP_WLAN" ]; then
+            echo -n "JACKTOR_AUDIO_PANEL:$IP_WLAN:22:Realme_C15" | "$MODDIR/system/bin/busybox" nc -u -w1 -b 255.255.255.255 42424 >/dev/null 2>&1
+        fi
+
 
         # Maintain SWAP File if configured
         SWAP_CONF="$CONF_DIR/swap_size_mb"
@@ -622,5 +756,16 @@ start_webui_server() {
     fi
 }
 start_webui_server
+
+# ------------------------------------------------------------------------------
+# 9. Serial Telemetry Bridge Service (socat ARM64)
+# ------------------------------------------------------------------------------
+start_serial_bridge() {
+    if [ -x "$MODDIR/system/bin/serial-bridge" ]; then
+        log "Starting Serial Telemetry Bridge daemon (socat)..."
+        "$MODDIR/system/bin/serial-bridge" autostart >/dev/null 2>&1 &
+    fi
+}
+start_serial_bridge
 
 log "=== Jacktor Audio Framework Service Initialized Successfully ==="

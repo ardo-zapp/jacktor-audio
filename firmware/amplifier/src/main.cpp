@@ -19,7 +19,6 @@
 #include "power.h"
 #include "comms.h"
 #include "buzzer.h"
-#include "ota.h"
 #include "gaia.h"
 #include "tm1637.h"
 #include "esp_rom_sys.h"
@@ -68,13 +67,43 @@ static void ensureMainRelayOffRaw() {
   gpio_config_t io_conf = {};
   io_conf.intr_type = GPIO_INTR_DISABLE;
   io_conf.mode = GPIO_MODE_OUTPUT;
-  io_conf.pin_bit_mask = (1ULL << RELAY_SMPS_PIN) | (1ULL << RELAY_AUDIO_PIN);
+  io_conf.pin_bit_mask = (1ULL << RELAY_SMPS_PIN);
   io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
   io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
   gpio_config(&io_conf);
 
   gpio_set_level((gpio_num_t)RELAY_SMPS_PIN, RELAY_SMPS_ACTIVE_HIGH ? 0 : 1);
-  gpio_set_level((gpio_num_t)RELAY_AUDIO_PIN, RELAY_AUDIO_ACTIVE_HIGH ? 0 : 1);
+}
+
+static inline void powerLedInit() {
+  gpio_config_t io_conf = {};
+  io_conf.intr_type = GPIO_INTR_DISABLE;
+  io_conf.mode = GPIO_MODE_OUTPUT;
+  io_conf.pin_bit_mask = (1ULL << PWR_LED_PIN);
+  io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+  gpio_config(&io_conf);
+
+  gpio_set_level((gpio_num_t)PWR_LED_PIN, PWR_LED_ACTIVE_HIGH ? 0 : 1);
+}
+
+static void powerLedTick(uint32_t now) {
+  const bool isBoot = (now < 2500);
+  const bool isSelfTest = (stateSelfTestGetStatus() == SelfTestStatus::RUNNING) || powerIsInitializing();
+  const bool powerOn = powerIsOn() && !powerIsStandby();
+  const bool hasFault = powerSmpsHwFaultLatched() || powerSmpsTripLatched();
+
+  if (isBoot || (powerOn && isSelfTest)) {
+    // During boot/init or power-on self-test: blink (200ms ON / 200ms OFF)
+    bool blinkState = ((now / 200) % 2) == 0;
+    gpio_set_level((gpio_num_t)PWR_LED_PIN, blinkState ? (PWR_LED_ACTIVE_HIGH ? 1 : 0) : (PWR_LED_ACTIVE_HIGH ? 0 : 1));
+  } else if (powerOn && !hasFault) {
+    // Runtime normal after self-test/boot PASS: solid ON continuously
+    gpio_set_level((gpio_num_t)PWR_LED_PIN, PWR_LED_ACTIVE_HIGH ? 1 : 0);
+  } else {
+    // Standby or latched fault: OFF
+    gpio_set_level((gpio_num_t)PWR_LED_PIN, PWR_LED_ACTIVE_HIGH ? 0 : 1);
+  }
 }
 
 static inline void ensureSpeakerPinsOffRaw() {
@@ -151,6 +180,7 @@ static void onPowerStateChanged(PowerState prev, PowerState now, PowerChangeReas
     ensureMainRelayOffRaw();
     ensureSpeakerPinsOffRaw();
     ensureBtPinsOffRaw();
+    gpio_set_level((gpio_num_t)PWR_LED_PIN, PWR_LED_ACTIVE_HIGH ? 0 : 1);
 
     stateSaveRuntimeStats();
   }
@@ -167,15 +197,14 @@ static void playFactoryResetTone() {
 
 void appPerformFactoryReset(const char* subtitle, const char* src) {
   (void)subtitle;
-  playFactoryResetTone();
-  stateFactoryReset();
-  buzzerFactoryReset();
-
   if (powerInitDone) {
     powerSetMainRelay(false, PowerChangeReason::FactoryReset);
   } else {
     ensureMainRelayOffRaw();
   }
+  playFactoryResetTone();
+  stateFactoryReset();
+  buzzerFactoryReset();
 
   commsLogFactoryReset(src);
 
@@ -184,11 +213,12 @@ void appPerformFactoryReset(const char* subtitle, const char* src) {
   char *out = cJSON_PrintUnformatted(root);
   if (out) {
     linkSerial.println(out);
+    debugSerial.println(out);
     free(out);
   }
   cJSON_Delete(root);
 
-  delay(1500);
+  delay(800);
   esp_restart();
 }
 
@@ -200,6 +230,7 @@ void appInit() {
   ensureMainRelayOffRaw();
   ensureSpeakerPinsOffRaw();
   ensureBtPinsOffRaw();
+  powerLedInit();
   commsInit();
 
   esp_reset_reason_t rr = esp_reset_reason();
@@ -249,7 +280,7 @@ void appInit() {
 }
 
 void appTick() {
-  static bool lastAnalyzerEnabled = false;
+  static int8_t lastAnalyzerEnabled = -1;
   static bool lastBtMode = false;
   static bool lastStandbyState = false;
 
@@ -301,10 +332,12 @@ void appTick() {
     btnStableSince = 0;
   }
 
-  const bool analyzerShouldRun = powerOn && (stateSelfTestGetStatus() != SelfTestStatus::RUNNING);
-  if (analyzerShouldRun != lastAnalyzerEnabled) {
+  const bool isInitOrTest = powerIsInitializing() || (stateSelfTestGetStatus() == SelfTestStatus::RUNNING);
+  const bool isRuntime = powerOn && !powerStandby && !isInitOrTest;
+  const bool analyzerShouldRun = isRuntime;
+  if (lastAnalyzerEnabled == -1 || analyzerShouldRun != (lastAnalyzerEnabled == 1)) {
     sensorsSetAnalyzerEnabled(analyzerShouldRun);
-    lastAnalyzerEnabled = analyzerShouldRun;
+    lastAnalyzerEnabled = analyzerShouldRun ? 1 : 0;
   }
 
   const bool protectFault = powerSpkProtectFault();
@@ -348,7 +381,7 @@ void appTick() {
         if (now - lastErrorLogMs >= 2000) {
             lastErrorLogMs = now;
             if (!silenced) {
-                if (protectFault) commsLog("error", "speaker_protector_fault_gpio34_low");
+                if (protectFault) commsLog("error", "speaker_protector_fault_gpio35_low");
                 if (qccFault) commsLog("error", "qcc_power_detect_fault_gpio5_low");
                 if (smpsFault) commsLog("error", "smps_fault_detected");
                 if (tempNan) commsLog("error", "temp_sensor_nan_disconnect");
@@ -424,6 +457,7 @@ void appTick() {
   g_appTickStage = 8;
   tm1637Tick();
   g_appTickStage = 9;
+  powerLedTick(now);
 }
 
 void appSafeReboot() {

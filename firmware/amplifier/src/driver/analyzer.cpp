@@ -7,6 +7,8 @@
 #include "kissfft/kiss_fftr.h"
 #include "esp_adc/adc_continuous.h"
 #include "hal/adc_types.h"
+#include "soc/sens_struct.h"
+#include "soc/rtc_io_struct.h"
 #include "esp_heap_caps.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
@@ -32,7 +34,7 @@ static float dynamicAdcCenter = ANA_ADC_CENTER;
 constexpr uint32_t kSamplingFrequency = ANA_FS_HZ;
 
 TaskHandle_t taskHandle = nullptr;
-bool enabled = true;
+bool enabled = false;
 bool adcReady = false;
 adc_continuous_handle_t adc_handle = nullptr;
 
@@ -182,7 +184,7 @@ bool setupAdc() {
 
   for (uint16_t i = 0; i < kSampleBlock; ++i) {
     ringBufL[i] = (int16_t)ANA_ADC_CENTER;
-    ringBufR[i] = 0;
+    ringBufR[i] = (int16_t)ANA_ADC_CENTER;
   }
   writeIdxL = 0;
   writeIdxR = 0;
@@ -207,12 +209,12 @@ bool setupAdc() {
   std::memset(adc_pattern, 0, sizeof(adc_pattern));
   // In ESP32, all channels on ADC1 must share the exact same attenuation (ADC_ATTEN_DB_12 = 0..3.3V)
   adc_pattern[0].atten = ADC_ATTEN_DB_12;
-  adc_pattern[0].channel = ADC_CHANNEL_0; // GPIO 36 (Right Channel)
+  adc_pattern[0].channel = ADC_CHANNEL_6; // GPIO 34 (Audio In L) - ADC1_CH6
   adc_pattern[0].unit = ADC_UNIT_1;
   adc_pattern[0].bit_width = ADC_BITWIDTH_12;
 
   adc_pattern[1].atten = ADC_ATTEN_DB_12;
-  adc_pattern[1].channel = ADC_CHANNEL_3; // GPIO 39 (Left Channel)
+  adc_pattern[1].channel = ADC_CHANNEL_3; // GPIO 39 (Audio In R) - ADC1_CH3
   adc_pattern[1].unit = ADC_UNIT_1;
   adc_pattern[1].bit_width = ADC_BITWIDTH_12;
 
@@ -243,6 +245,47 @@ bool setupAdc() {
     adc_handle = nullptr;
     return false;
   }
+
+  // Disable ESP32 internal LNA (low-noise amp) and Hall sensor
+  // 1. Completely disconnect and power off internal Hall sensor from VP (GPIO 36) and VN (GPIO 39)
+  RTCIO.hall_sens.xpd_hall = 0;
+  RTCIO.hall_sens.hall_phase = 0;
+  SENS.sar_touch_ctrl1.xpd_hall_force = 1;
+  SENS.sar_touch_ctrl1.hall_phase_force = 1;
+
+  // 2. Disable internal Low-Noise Amplifier (LNA) FSM
+  SENS.sar_meas_wait2.force_xpd_amp = 2; // 2 = Force power down (SENS_FORCE_XPD_AMP_PD)
+  SENS.sar_meas_ctrl.amp_rst_fb_fsm = 0;
+  SENS.sar_meas_ctrl.amp_short_ref_fsm = 0;
+  SENS.sar_meas_ctrl.amp_short_ref_gnd_fsm = 0;
+  SENS.sar_meas_wait1.sar_amp_wait1 = 1;
+  SENS.sar_meas_wait1.sar_amp_wait2 = 1;
+  SENS.sar_meas_wait2.sar_amp_wait3 = 1;
+
+  // 3. Configure RTC pad mux:
+  // - GPIO 34 (VDET_1 / adc1 in RTCIO.adc_pad): Audio In L (Analog ADC1_CH6)
+  // - GPIO 39 (SENSE4 / sense4 in RTCIO.sensor_pads): Audio In R (Analog ADC1_CH3)
+  // - GPIO 35 (VDET_2 / adc2 in RTCIO.adc_pad): Speaker Protect LED Monitor (Digital GPIO Input)
+  // - GPIO 36 (SENSOR_VP / sense1 in RTCIO.sensor_pads): SQW 1 Hz Digital Input
+  RTCIO.adc_pad.adc1_mux_sel = 1; // 1 = Connect GPIO 34 (VDET_1) to analog RTC/ADC module
+  RTCIO.adc_pad.adc1_fun_sel = 0;
+  RTCIO.adc_pad.adc1_fun_ie = 0;
+  RTCIO.adc_pad.adc1_hold = 0;
+
+  RTCIO.sensor_pads.sense4_mux_sel = 1; // 1 = Connect GPIO 39 (SENSE4) to analog RTC/ADC module
+  RTCIO.sensor_pads.sense4_fun_sel = 0;
+  RTCIO.sensor_pads.sense4_fun_ie = 0;
+  RTCIO.sensor_pads.sense4_hold = 0;
+
+  RTCIO.adc_pad.adc2_mux_sel = 0; // 0 = Digital GPIO for GPIO 35 (Speaker Protect LED Monitor)
+  RTCIO.adc_pad.adc2_fun_sel = 0;
+  RTCIO.adc_pad.adc2_fun_ie = 1;  // Input enable for digital reading
+  RTCIO.adc_pad.adc2_hold = 0;
+
+  RTCIO.sensor_pads.sense1_mux_sel = 0; // 0 = Digital GPIO for GPIO 36 (DS3231 SQW Input)
+  RTCIO.sensor_pads.sense1_fun_sel = 0;
+  RTCIO.sensor_pads.sense1_fun_ie = 1;  // Input enable for digital reading
+  RTCIO.sensor_pads.sense1_hold = 0;
 
   if (!fftCfg) {
     fftCfg = kiss_fftr_alloc(kSampleBlock, 0, nullptr, nullptr);
@@ -317,6 +360,8 @@ static uint16_t diagMaxBucketR = 0;
 static bool gateOpenR = false;
 static float lastDcOffsetL = 0.0f;
 static float lastDcOffsetR = 0.0f;
+static float lastP2pL = 0.0f;
+static float lastP2pR = 0.0f;
 
 void processFft() {
   if (!fftCfg || !ringBufL || !ringBufR || !smoothMagL || !smoothMagR || !baseNoiseL || !baseNoiseR) return;
@@ -324,22 +369,34 @@ void processFft() {
   const uint16_t snapIdxR = writeIdxR;
   const uint16_t snapIdxL = writeIdxL;
 
-  // 1. Dynamic DC Offset Calculation (independent L & R)
+  // 1. Dynamic DC Offset & Time-Domain Peak-to-Peak (independent L & R)
   float dcSumL = 0.0f;
   float dcSumR = 0.0f;
+  float minValL = 4095.0f, maxValL = 0.0f;
+  float minValR = 4095.0f, maxValR = 0.0f;
 
   for (uint16_t i = 0; i < kSampleBlock; ++i) {
-    dcSumR += (float)ringBufR[(snapIdxR + i) & (kSampleBlock - 1)];
-    dcSumL += (float)ringBufL[(snapIdxL + i) & (kSampleBlock - 1)];
+    float sR = (float)ringBufR[(snapIdxR + i) & (kSampleBlock - 1)];
+    float sL = (float)ringBufL[(snapIdxL + i) & (kSampleBlock - 1)];
+    dcSumR += sR;
+    dcSumL += sL;
+    if (sL < minValL) minValL = sL;
+    if (sL > maxValL) maxValL = sL;
+    if (sR < minValR) minValR = sR;
+    if (sR > maxValR) maxValR = sR;
   }
 
   float dcOffsetR = dcSumR / (float)kSampleBlock;
   float dcOffsetL = dcSumL / (float)kSampleBlock;
   lastDcOffsetL = dcOffsetL;
   lastDcOffsetR = dcOffsetR;
+  float p2pL = (maxValL >= minValL) ? (maxValL - minValL) : 0.0f;
+  float p2pR = (maxValR >= minValR) ? (maxValR - minValR) : 0.0f;
+  lastP2pL = p2pL;
+  lastP2pR = p2pR;
 
   // 2. 1-Pole IIR DC Blocker Filter (fc ~25 Hz @ 44.1 kHz, R = 0.996f) + Direct Hann Windowing
-  // Eliminates CMOS capacitance low-frequency charge drift and baseline wander on GPIO 36 & 39
+  // Eliminates CMOS capacitance low-frequency charge drift and baseline wander on GPIO 34 & 39
   static float dcBlockPrevInL = 0.0f;
   static float dcBlockPrevOutL = 0.0f;
   static float dcBlockPrevInR = 0.0f;
@@ -378,19 +435,12 @@ void processFft() {
   resetBins();
 
   constexpr uint16_t kFirstBucket = 1; // Start at bucket 1 (43.1 Hz) to capture sub-bass
-  constexpr uint16_t kHalfBlock = kSampleBlock / 2;
   constexpr uint16_t kAudibleMaxBucket = (ANA_F_HI_HZ * kSampleBlock) / kSamplingFrequency; // ~418 buckets (18 kHz)
   constexpr float kNumBins = (float)(kAudibleMaxBucket - kFirstBucket);
 
-  // Precision hardware-calibrated analog voltage-divider compensation for GPIO 36 (Right Channel)
-  // Physical circuit inspection and measurements show ~9.80x signal attenuation on GPIO 36 relative to GPIO 39.
-  constexpr float kAnalogScaleR = 9.80f;
-
-  const bool halfWaveL = (dcOffsetL < 350.0f);
-  const bool halfWaveR = (dcOffsetR < 350.0f);
-  // Symmetrical calibrated reference scaling: Left = 1.00f reference, Right = 9.80f hardware scaling
-  const float hwCompL = halfWaveL ? 2.00f : 1.00f;
-  const float hwCompR = (halfWaveR ? 2.00f : 1.00f) * kAnalogScaleR;
+  // Precision hardware-calibrated scale for GPIO 34 (L) & GPIO 39 (R)
+  const float hwCompL = 1.00f; // Left full-wave reference (GPIO 34)
+  const float hwCompR = 1.00f; // Right full-wave reference (GPIO 39)
 
   cleanExcessBufL[0] = 0.0f;
   cleanExcessBufR[0] = 0.0f;
@@ -408,12 +458,12 @@ void processFft() {
     float rawMagR = sqrtf(rR * rR + imR * imR) * hwCompR;
     rawSumMagR += rawMagR;
 
-    // Welch EMA smoothing across 8ms overlapping frames (suppresses random thermal variance by ~3.5x)
+    // Welch EMA smoothing across 8ms overlapping frames (fast attack, snappy natural release)
     if (smoothMagL[bucket] == 0.0f && baseNoiseL[bucket] == 0.0f) {
       smoothMagL[bucket] = rawMagL;
       baseNoiseL[bucket] = rawMagL;
     } else {
-      float alphaL = (rawMagL > smoothMagL[bucket]) ? 0.28f : 0.20f;
+      float alphaL = (rawMagL > smoothMagL[bucket]) ? 0.48f : 0.32f;
       smoothMagL[bucket] = (1.0f - alphaL) * smoothMagL[bucket] + alphaL * rawMagL;
     }
 
@@ -421,89 +471,13 @@ void processFft() {
       smoothMagR[bucket] = rawMagR;
       baseNoiseR[bucket] = rawMagR;
     } else {
-      float alphaR = (rawMagR > smoothMagR[bucket]) ? 0.28f : 0.20f;
+      float alphaR = (rawMagR > smoothMagR[bucket]) ? 0.48f : 0.32f;
       smoothMagR[bucket] = (1.0f - alphaR) * smoothMagR[bucket] + alphaR * rawMagR;
     }
   }
 
   float meanMagL = rawSumMagL / kNumBins;
   float meanMagR = rawSumMagR / kNumBins;
-
-  float maxExcessL = 0.0f;
-  float maxExcessR = 0.0f;
-  float sumExcessL = 0.0f;
-  float sumExcessR = 0.0f;
-  uint16_t curMaxBucketL = 0;
-  uint16_t curMaxBucketR = 0;
-
-  for (uint16_t bucket = kFirstBucket; bucket < kAudibleMaxBucket; ++bucket) {
-    // Dynamic Leaky Baseline Estimator:
-    // If incoming level is below baseline, rapidly decay downwards (0.90 / 0.10) to follow floor.
-    // If incoming level is above baseline, slowly climb upwards (0.995 / 0.005) to absorb constant
-    // steady-state noise (like SMPS ripple, ground hum) without eating dynamic audio tones.
-    if (smoothMagL[bucket] < baseNoiseL[bucket]) {
-      baseNoiseL[bucket] = 0.90f * baseNoiseL[bucket] + 0.10f * smoothMagL[bucket];
-    } else {
-      bool isPeakL = gateOpenL && (bucket == curMaxBucketL || bucket + 1 == curMaxBucketL || curMaxBucketL + 1 == bucket);
-      if (!isPeakL) {
-        baseNoiseL[bucket] = 0.995f * baseNoiseL[bucket] + 0.005f * smoothMagL[bucket];
-      }
-    }
-    baseNoiseL[bucket] = std::clamp(baseNoiseL[bucket], 30.0f, 650.0f);
-
-    if (smoothMagR[bucket] < baseNoiseR[bucket]) {
-      baseNoiseR[bucket] = 0.90f * baseNoiseR[bucket] + 0.10f * smoothMagR[bucket];
-    } else {
-      bool isPeakR = gateOpenR && (bucket == curMaxBucketR || bucket + 1 == curMaxBucketR || curMaxBucketR + 1 == bucket);
-      if (!isPeakR) {
-        baseNoiseR[bucket] = 0.995f * baseNoiseR[bucket] + 0.005f * smoothMagR[bucket];
-      }
-    }
-    baseNoiseR[bucket] = std::clamp(baseNoiseR[bucket], 30.0f, 650.0f);
-
-    float mainsMarginL = (bucket <= 2) ? 22.0f : 14.0f;
-    float exL = smoothMagL[bucket] - (baseNoiseL[bucket] * 1.12f + mainsMarginL);
-    if (exL < 0.0f) exL = 0.0f;
-    cleanExcessBufL[bucket] = exL;
-    sumExcessL += exL;
-    if (exL > maxExcessL) {
-      maxExcessL = exL;
-      curMaxBucketL = bucket;
-    }
-
-    float mainsMarginR = (bucket <= 2) ? 32.0f : 14.0f;
-    float exR = smoothMagR[bucket] - (baseNoiseR[bucket] * 1.12f + mainsMarginR);
-    if (exR < 0.0f) exR = 0.0f;
-    cleanExcessBufR[bucket] = exR;
-    sumExcessR += exR;
-    if (exR > maxExcessR) {
-      maxExcessR = exR;
-      curMaxBucketR = bucket;
-    }
-  }
-
-  // Coherent Bin Persistence Lock:
-  // In silence, the highest noise fluctuation jumps randomly across 418 bins every 8ms (binLockCount <= 2).
-  // Even a 1% volume (-40 dBFS) tone stays locked on the same bin (+-1) across consecutive frames!
-  static uint16_t prevPeakBucketL = 0;
-  static uint8_t binLockCountL = 0;
-  if (maxExcessL >= 20.0f && curMaxBucketL > 0 &&
-      (curMaxBucketL == prevPeakBucketL || curMaxBucketL + 1 == prevPeakBucketL || prevPeakBucketL + 1 == curMaxBucketL)) {
-    if (binLockCountL < 40) binLockCountL++;
-  } else {
-    binLockCountL = (maxExcessL >= 20.0f) ? 1 : 0;
-    prevPeakBucketL = curMaxBucketL;
-  }
-
-  static uint16_t prevPeakBucketR = 0;
-  static uint8_t binLockCountR = 0;
-  if (maxExcessR >= 20.0f && curMaxBucketR > 0 &&
-      (curMaxBucketR == prevPeakBucketR || curMaxBucketR + 1 == prevPeakBucketR || prevPeakBucketR + 1 == curMaxBucketR)) {
-    if (binLockCountR < 40) binLockCountR++;
-  } else {
-    binLockCountR = (maxExcessR >= 20.0f) ? 1 : 0;
-    prevPeakBucketR = curMaxBucketR;
-  }
 
   float userGateL = (noiseL > 0.0f && noiseL < 20.0f) ? (noiseL * 400.0f) : std::max(0.0f, noiseL);
   float userGateR = (noiseR > 0.0f && noiseR < 20.0f) ? (noiseR * 400.0f) : std::max(0.0f, noiseR);
@@ -513,119 +487,262 @@ void processFft() {
   float gainRelaxL = (multL > 1.0f) ? std::max(0.70f, 1.0f / sqrtf(multL)) : 1.0f;
   float gainRelaxR = (multR > 1.0f) ? std::max(0.70f, 1.0f / sqrtf(multR)) : 1.0f;
 
-  // 5. Intelligent Dual-Path Noise Gate (Coherent Low-Volume Lock + Broadband Energy Gate)
-  constexpr float kThrCoherentOpen = 24.0f;
-  constexpr float kThrBroadbandOpen = 85.0f;
-  constexpr float kThrClose = 16.0f;
-
+  constexpr float kThrCoherentOpen = 60.0f;
+  constexpr float kThrClose = 35.0f;
   const float thrCoherentOpenL = kThrCoherentOpen * gainRelaxL + userGateL;
-  const float thrBroadbandOpenL = kThrBroadbandOpen * gainRelaxL + userGateL;
   const float thrCloseL = kThrClose * gainRelaxL + userGateL;
-
   const float thrCoherentOpenR = kThrCoherentOpen * gainRelaxR + userGateR;
-  const float thrBroadbandOpenR = kThrBroadbandOpen * gainRelaxR + userGateR;
   const float thrCloseR = kThrClose * gainRelaxR + userGateR;
 
+  float maxExcessL = 0.0f;
+  float maxExcessR = 0.0f;
+  float sumExcessL = 0.0f;
+  float sumExcessR = 0.0f;
+  uint16_t curMaxBucketL = 0;
+  uint16_t curMaxBucketR = 0;
+
+  static uint16_t prevPeakBucketL = 0;
+  static uint16_t prevPeakBucketR = 0;
+  static uint8_t binLockCountL = 0;
+  static uint8_t binLockCountR = 0;
+
+  for (uint16_t bucket = kFirstBucket; bucket < kAudibleMaxBucket; ++bucket) {
+    // Dynamic Leaky Baseline Estimator:
+    // Tracks stationary ambient noise floor per bin (SMPS switching ripple and mains ground hum).
+    bool isLockedToneL = (binLockCountL >= 2) && (prevPeakBucketL > 0) &&
+                         (bucket + 1 >= prevPeakBucketL && bucket <= prevPeakBucketL + 1);
+    bool isLockedToneR = (binLockCountR >= 2) && (prevPeakBucketR > 0) &&
+                         (bucket + 1 >= prevPeakBucketR && bucket <= prevPeakBucketR + 1);
+
+    if (smoothMagL[bucket] < baseNoiseL[bucket]) {
+      baseNoiseL[bucket] = 0.88f * baseNoiseL[bucket] + 0.12f * smoothMagL[bucket];
+    } else if (!isLockedToneL) {
+      baseNoiseL[bucket] = 0.96f * baseNoiseL[bucket] + 0.04f * smoothMagL[bucket];
+    }
+    baseNoiseL[bucket] = std::clamp(baseNoiseL[bucket], 5.0f, 6000.0f);
+
+    if (smoothMagR[bucket] < baseNoiseR[bucket]) {
+      baseNoiseR[bucket] = 0.88f * baseNoiseR[bucket] + 0.12f * smoothMagR[bucket];
+    } else if (!isLockedToneR) {
+      baseNoiseR[bucket] = 0.96f * baseNoiseR[bucket] + 0.04f * smoothMagR[bucket];
+    }
+    baseNoiseR[bucket] = std::clamp(baseNoiseR[bucket], 5.0f, 6000.0f);
+
+    // Left Channel Noise Margins (mains hum suppression at buckets 1..2, SMPS at high buckets)
+    float mainsMarginL = (bucket <= 2) ? 550.0f :
+                         ((bucket <= 12) ? 300.0f :
+                         ((bucket >= 320) ? 300.0f : 220.0f));
+    float exL = smoothMagL[bucket] - (baseNoiseL[bucket] * 1.25f + mainsMarginL);
+    if (exL < 15.0f) exL = 0.0f;
+    cleanExcessBufL[bucket] = exL;
+    sumExcessL += exL;
+    if (exL > maxExcessL) {
+      maxExcessL = exL;
+      curMaxBucketL = bucket;
+    }
+
+    // Right Channel Noise Margins (mains hum suppression at buckets 1..2, SMPS at high buckets)
+    float mainsMarginR = (bucket <= 2) ? 550.0f :
+                         ((bucket <= 12) ? 300.0f :
+                         ((bucket >= 320) ? 300.0f : 220.0f));
+    float exR = smoothMagR[bucket] - (baseNoiseR[bucket] * 1.25f + mainsMarginR);
+    if (exR < 15.0f) exR = 0.0f;
+    cleanExcessBufR[bucket] = exR;
+    sumExcessR += exR;
+    if (exR > maxExcessR) {
+      maxExcessR = exR;
+      curMaxBucketR = bucket;
+    }
+  }
+
+  // Dynamic Inter-Channel Crosstalk Decoupling:
+  // Decouples physical capacitive trace and ground bleed between GPIO 34 (L) & 39 (R)
+  if (maxExcessR > 600.0f && curMaxBucketL == curMaxBucketR) {
+    float bleedToL = maxExcessR * 0.10f;
+    if (maxExcessL <= bleedToL * 1.30f) {
+      maxExcessL = std::max(0.0f, maxExcessL - bleedToL);
+      cleanExcessBufL[curMaxBucketL] = std::max(0.0f, cleanExcessBufL[curMaxBucketL] - bleedToL);
+    }
+  }
+  if (maxExcessL > 600.0f && curMaxBucketR == curMaxBucketL) {
+    float bleedToR = maxExcessL * 0.10f;
+    if (maxExcessR <= bleedToR * 1.30f) {
+      maxExcessR = std::max(0.0f, maxExcessR - bleedToR);
+      cleanExcessBufR[curMaxBucketR] = std::max(0.0f, cleanExcessBufR[curMaxBucketR] - bleedToR);
+    }
+  }
+
+  // Coherent Bin Persistence Lock:
+  // Audio tones lock rock-solid on the target bin within 24ms.
+  // Immediate reset on loss of signal guarantees instant squelch when audio stops!
+  constexpr float kBinLockMinExcessL = 120.0f;
+  if (maxExcessL >= kBinLockMinExcessL && curMaxBucketL > 0) {
+    if (prevPeakBucketL > 0 &&
+        (curMaxBucketL == prevPeakBucketL || curMaxBucketL + 1 == prevPeakBucketL || prevPeakBucketL + 1 == curMaxBucketL)) {
+      if (binLockCountL < 20) binLockCountL++;
+    } else {
+      binLockCountL = 1;
+    }
+    prevPeakBucketL = curMaxBucketL;
+  } else {
+    binLockCountL = 0;
+    prevPeakBucketL = 0;
+  }
+
+  constexpr float kBinLockMinExcessR = 120.0f;
+  if (maxExcessR >= kBinLockMinExcessR && curMaxBucketR > 0) {
+    if (prevPeakBucketR > 0 &&
+        (curMaxBucketR == prevPeakBucketR || curMaxBucketR + 1 == prevPeakBucketR || prevPeakBucketR + 1 == curMaxBucketR)) {
+      if (binLockCountR < 20) binLockCountR++;
+    } else {
+      binLockCountR = 1;
+    }
+    prevPeakBucketR = curMaxBucketR;
+  } else {
+    binLockCountR = 0;
+    prevPeakBucketR = 0;
+  }
+
+  // 5. Intelligent Dual-Path Noise Gate with Realtime Snappy Squelch (<25ms)
+  constexpr uint8_t kGateHoldFrames = 2; // ~16ms hold time (snappy, realtime release!)
   static uint8_t holdFramesL = 0;
-  bool signalDetectedL = (maxExcessL >= thrBroadbandOpenL) ||
-                         (binLockCountL >= 4 && maxExcessL >= thrCoherentOpenL) ||
-                         (sumExcessL >= 850.0f * gainRelaxL + userGateL * 4.0f);
-
-  if (!gateOpenL) {
-    if (signalDetectedL) {
-      gateOpenL = true;
-      holdFramesL = 18;
-    }
-  } else {
-    if (maxExcessL >= thrCloseL && (binLockCountL >= 2 || maxExcessL >= thrBroadbandOpenL * 0.7f || sumExcessL >= 550.0f)) {
-      holdFramesL = 18;
-    } else {
-      if (holdFramesL > 0) holdFramesL--;
-      else gateOpenL = false;
-    }
-  }
-
   static uint8_t holdFramesR = 0;
-  bool signalDetectedR = (maxExcessR >= thrBroadbandOpenR) ||
-                         (binLockCountR >= 4 && maxExcessR >= thrCoherentOpenR) ||
-                         (sumExcessR >= 850.0f * gainRelaxR + userGateR * 4.0f);
 
-  if (!gateOpenR) {
-    if (signalDetectedR) {
-      gateOpenR = true;
-      holdFramesR = 18;
+  const float meanExcessL = sumExcessL / kNumBins;
+  const float crestFactorL = (meanExcessL > 0.01f) ? (maxExcessL / (meanExcessL + 1.0f)) : 0.0f;
+  const float meanExcessR = sumExcessR / kNumBins;
+  const float crestFactorR = (meanExcessR > 0.01f) ? (maxExcessR / (meanExcessR + 1.0f)) : 0.0f;
+
+  // Single-tone detection: requires lock on target bin, physical p2p swing, and sharp crest factor
+  bool hasActiveToneL = (binLockCountL >= 3 && maxExcessL >= 700.0f * gainRelaxL && crestFactorL >= 2.0f);
+  bool hasActiveToneR = (binLockCountR >= 3 && maxExcessR >= 700.0f * gainRelaxR && crestFactorR >= 2.0f);
+
+  // Broadband music detection: requires physical signal and multi-bin energy
+  static uint8_t musicDebounceL = 0;
+  static uint8_t musicDebounceR = 0;
+  const float p2pGateThrL = 300.0f * gainRelaxL + userGateL * 0.10f;
+  const float p2pGateThrR = 300.0f * gainRelaxR + userGateR * 0.10f;
+  bool frameMusicL = (p2pL >= p2pGateThrL) && (sumExcessL >= 1800.0f * gainRelaxL + userGateL * 3.0f) && (maxExcessL >= 250.0f * gainRelaxL);
+  bool frameMusicR = (p2pR >= p2pGateThrR) && (sumExcessR >= 1800.0f * gainRelaxR + userGateR * 3.0f) && (maxExcessR >= 250.0f * gainRelaxR);
+
+  if (frameMusicL) {
+    if (musicDebounceL < 2) musicDebounceL++;
+  } else {
+    musicDebounceL = 0;
+  }
+  if (frameMusicR) {
+    if (musicDebounceR < 2) musicDebounceR++;
+  } else {
+    musicDebounceR = 0;
+  }
+
+  bool activeAudioPresentL = hasActiveToneL || (musicDebounceL >= 2);
+  bool activeAudioPresentR = hasActiveToneR || (musicDebounceR >= 2);
+
+  // Channel L Gate state machine
+  if (!gateOpenL) {
+    if (activeAudioPresentL) {
+      gateOpenL = true;
+      holdFramesL = kGateHoldFrames;
     }
   } else {
-    if (maxExcessR >= thrCloseR && (binLockCountR >= 2 || maxExcessR >= thrBroadbandOpenR * 0.7f || sumExcessR >= 550.0f)) {
-      holdFramesR = 18;
+    if (activeAudioPresentL) {
+      holdFramesL = kGateHoldFrames;
     } else {
-      if (holdFramesR > 0) holdFramesR--;
-      else gateOpenR = false;
+      if (holdFramesL > 0) {
+        holdFramesL--;
+      } else {
+        gateOpenL = false;
+        prevPeakBucketL = 0;
+        binLockCountL = 0;
+      }
     }
   }
 
-  diagMaxMagL = maxExcessL;
+  // Channel R Gate state machine (100% Independent)
+  if (!gateOpenR) {
+    if (activeAudioPresentR) {
+      gateOpenR = true;
+      holdFramesR = kGateHoldFrames;
+    }
+  } else {
+    if (activeAudioPresentR) {
+      holdFramesR = kGateHoldFrames;
+    } else {
+      if (holdFramesR > 0) {
+        holdFramesR--;
+      } else {
+        gateOpenR = false;
+        prevPeakBucketR = 0;
+        binLockCountR = 0;
+      }
+    }
+  }
+
+  diagMaxMagL = gateOpenL ? maxExcessL : 0.0f;
   diagMeanMagL = meanMagL;
-  diagMaxBucketL = curMaxBucketL;
+  diagMaxBucketL = gateOpenL ? curMaxBucketL : 0;
   diagThrL = gateOpenL ? thrCloseL : thrCoherentOpenL;
-  diagMaxMagR = maxExcessR;
+
+  diagMaxMagR = gateOpenR ? maxExcessR : 0.0f;
   diagMeanMagR = meanMagR;
-  diagMaxBucketR = curMaxBucketR;
+  diagMaxBucketR = gateOpenR ? curMaxBucketR : 0;
   diagThrR = gateOpenR ? thrCloseR : thrCoherentOpenR;
 
   bool silentL = !gateOpenL || (multL <= 0.0001f);
   bool silentR = !gateOpenR || (multR <= 0.0001f);
 
-  const float meanExcessL = sumExcessL / kNumBins;
-  const float meanExcessR = sumExcessR / kNumBins;
-  const bool isTonalL = (binLockCountL >= 3) || (meanExcessL > 0.1f && (maxExcessL / meanExcessL) > 5.5f);
-  const bool isTonalR = (binLockCountR >= 3) || (meanExcessR > 0.1f && (maxExcessR / meanExcessR) > 5.0f);
+  const bool isTonalL = (binLockCountL >= 4) && (meanExcessL > 0.05f && crestFactorL > 8.0f);
+  const bool isTonalR = (binLockCountR >= 4) && (meanExcessR > 0.05f && crestFactorR > 8.0f);
 
   // Sub-bass 30Hz (B01) vs 50Hz (B02) spectral discrimination using Bucket 1 (43Hz) & Bucket 2 (86Hz)
   const float subRatioL = (cleanExcessBufL[1] > 15.0f) ? (cleanExcessBufL[2] / cleanExcessBufL[1]) : 1.0f;
   const float subRatioR = (cleanExcessBufR[1] > 15.0f) ? (cleanExcessBufR[2] / cleanExcessBufR[1]) : 1.0f;
 
   for (uint16_t bucket = kFirstBucket; bucket < kAudibleMaxBucket; ++bucket) {
-    const uint32_t freq = WsBucketFrequency(bucket, kSamplingFrequency, kSampleBlock);
-    uint8_t band = mapFreqToBand(freq, bandsLen);
+    const uint32_t freqL = WsBucketFrequency(bucket, kSamplingFrequency, kSampleBlock);
+    uint8_t bandL = mapFreqToBand(freqL, bandsLen);
+
+    const uint32_t freqR = freqL;
+    uint8_t bandR = mapFreqToBand(freqR, bandsLen);
 
     if (!silentL) {
       float cleanMagL = cleanExcessBufL[bucket];
-      // For tonal signals, suppress outer Hann sidebands and unlocked thermal noise bins
+      if (curMaxBucketL > 2 && (bucket == 1 || bucket == 2)) {
+        cleanMagL *= 0.01f;
+      }
+      // For pure tonal test signals, suppress outer Hann sidebands
       bool nearPeakL = (bucket == curMaxBucketL) || (bucket + 1 == curMaxBucketL) || (curMaxBucketL + 1 == bucket);
       if (isTonalL) {
-        if (!nearPeakL && cleanMagL < 0.35f * maxExcessL + 42.0f) {
+        if (!nearPeakL && cleanMagL < 0.25f * maxExcessL + 30.0f) {
           cleanMagL = 0.0f;
-        }
-        if (curMaxBucketL > 2 && (bucket == 1 || bucket == 2)) {
-          cleanMagL *= 0.05f;
         }
         float adjMaxL = cleanExcessBufL[bucket - 1];
         if (bucket + 1 < kAudibleMaxBucket && cleanExcessBufL[bucket + 1] > adjMaxL) {
           adjMaxL = cleanExcessBufL[bucket + 1];
         }
-        if (cleanMagL < 0.78f * adjMaxL) {
-          cleanMagL *= 0.04f;
+        if (cleanMagL < 0.65f * adjMaxL) {
+          cleanMagL *= 0.10f;
         }
       } else {
-        // Broadband signal: require each bin to exceed residual thermal ripple
-        if (cleanMagL < 38.0f) cleanMagL = 0.0f;
+        // Broadband music: display all organic audio frequencies above noise floor
+        if (cleanMagL < 35.0f * gainRelaxL) cleanMagL = 0.0f;
       }
 
       if (bandsLen == 16 && bucket == 1) {
         if (subRatioL < 0.46f) {
-          float wB01 = cleanMagL * getBandWeight(0, bandsLen, halfWaveL) * multL;
-          float wB02 = cleanMagL * getBandWeight(1, bandsLen, halfWaveL) * multL * 0.12f;
+          float wB01 = cleanMagL * getBandWeight(0, bandsLen) * multL;
+          float wB02 = cleanMagL * getBandWeight(1, bandsLen) * multL * 0.12f;
           if (wB01 > freqBinsL[0]) freqBinsL[0] = wB01;
           if (wB02 > freqBinsL[1]) freqBinsL[1] = wB02;
         } else if (subRatioL < 1.15f) {
-          float wB01 = cleanMagL * getBandWeight(0, bandsLen, halfWaveL) * multL * 0.12f;
-          float wB02 = cleanMagL * getBandWeight(1, bandsLen, halfWaveL) * multL;
+          float wB01 = cleanMagL * getBandWeight(0, bandsLen) * multL * 0.12f;
+          float wB02 = cleanMagL * getBandWeight(1, bandsLen) * multL;
           if (wB01 > freqBinsL[0]) freqBinsL[0] = wB01;
           if (wB02 > freqBinsL[1]) freqBinsL[1] = wB02;
         } else {
-          float wB01 = cleanMagL * getBandWeight(0, bandsLen, halfWaveL) * multL * 0.85f;
-          float wB02 = cleanMagL * getBandWeight(1, bandsLen, halfWaveL) * multL * 0.90f;
+          float wB01 = cleanMagL * getBandWeight(0, bandsLen) * multL * 0.85f;
+          float wB02 = cleanMagL * getBandWeight(1, bandsLen) * multL * 0.90f;
           if (wB01 > freqBinsL[0]) freqBinsL[0] = wB01;
           if (wB02 > freqBinsL[1]) freqBinsL[1] = wB02;
         }
@@ -633,49 +750,50 @@ void processFft() {
         if (bandsLen == 16 && bucket == 2 && isTonalL && curMaxBucketL == 1) {
           cleanMagL *= 0.08f;
         }
-        float weightL = getBandWeight(band, bandsLen, halfWaveL);
+        float weightL = getBandWeight(bandL, bandsLen);
         float weightedMagL = cleanMagL * weightL * multL;
-        if (weightedMagL > freqBinsL[band]) {
-          freqBinsL[band] = weightedMagL;
+        if (weightedMagL > freqBinsL[bandL]) {
+          freqBinsL[bandL] = weightedMagL;
         }
       }
     }
 
     if (!silentR) {
       float cleanMagR = cleanExcessBufR[bucket];
+      if (curMaxBucketR > 2 && (bucket == 1 || bucket == 2)) {
+        cleanMagR *= 0.01f;
+      }
       bool nearPeakR = (bucket == curMaxBucketR) || (bucket + 1 == curMaxBucketR) || (curMaxBucketR + 1 == bucket);
       if (isTonalR) {
-        if (!nearPeakR && cleanMagR < 0.35f * maxExcessR + 42.0f) {
+        if (!nearPeakR && cleanMagR < 0.25f * maxExcessR + 30.0f) {
           cleanMagR = 0.0f;
-        }
-        if (curMaxBucketR > 2 && (bucket == 1 || bucket == 2)) {
-          cleanMagR *= 0.05f;
         }
         float adjMaxR = cleanExcessBufR[bucket - 1];
         if (bucket + 1 < kAudibleMaxBucket && cleanExcessBufR[bucket + 1] > adjMaxR) {
           adjMaxR = cleanExcessBufR[bucket + 1];
         }
-        if (cleanMagR < 0.78f * adjMaxR) {
-          cleanMagR *= 0.04f;
+        if (cleanMagR < 0.65f * adjMaxR) {
+          cleanMagR *= 0.10f;
         }
       } else {
-        if (cleanMagR < 42.0f) cleanMagR = 0.0f;
+        // Broadband music: display all organic audio frequencies above noise floor
+        if (cleanMagR < 35.0f * gainRelaxR) cleanMagR = 0.0f;
       }
 
       if (bandsLen == 16 && bucket == 1) {
         if (subRatioR < 0.46f) {
-          float wB01 = cleanMagR * getBandWeight(0, bandsLen, halfWaveR) * multR;
-          float wB02 = cleanMagR * getBandWeight(1, bandsLen, halfWaveR) * multR * 0.12f;
+          float wB01 = cleanMagR * getBandWeight(0, bandsLen) * multR;
+          float wB02 = cleanMagR * getBandWeight(1, bandsLen) * multR * 0.12f;
           if (wB01 > freqBinsR[0]) freqBinsR[0] = wB01;
           if (wB02 > freqBinsR[1]) freqBinsR[1] = wB02;
         } else if (subRatioR < 1.15f) {
-          float wB01 = cleanMagR * getBandWeight(0, bandsLen, halfWaveR) * multR * 0.12f;
-          float wB02 = cleanMagR * getBandWeight(1, bandsLen, halfWaveR) * multR;
+          float wB01 = cleanMagR * getBandWeight(0, bandsLen) * multR * 0.12f;
+          float wB02 = cleanMagR * getBandWeight(1, bandsLen) * multR;
           if (wB01 > freqBinsR[0]) freqBinsR[0] = wB01;
           if (wB02 > freqBinsR[1]) freqBinsR[1] = wB02;
         } else {
-          float wB01 = cleanMagR * getBandWeight(0, bandsLen, halfWaveR) * multR * 0.85f;
-          float wB02 = cleanMagR * getBandWeight(1, bandsLen, halfWaveR) * multR * 0.90f;
+          float wB01 = cleanMagR * getBandWeight(0, bandsLen) * multR * 0.85f;
+          float wB02 = cleanMagR * getBandWeight(1, bandsLen) * multR * 0.90f;
           if (wB01 > freqBinsR[0]) freqBinsR[0] = wB01;
           if (wB02 > freqBinsR[1]) freqBinsR[1] = wB02;
         }
@@ -683,10 +801,10 @@ void processFft() {
         if (bandsLen == 16 && bucket == 2 && isTonalR && curMaxBucketR == 1) {
           cleanMagR *= 0.08f;
         }
-        float weightR = getBandWeight(band, bandsLen, halfWaveR);
+        float weightR = getBandWeight(bandR, bandsLen);
         float weightedMagR = cleanMagR * weightR * multR;
-        if (weightedMagR > freqBinsR[band]) {
-          freqBinsR[band] = weightedMagR;
+        if (weightedMagR > freqBinsR[bandR]) {
+          freqBinsR[bandR] = weightedMagR;
         }
       }
     }
@@ -714,6 +832,9 @@ void processFft() {
     diagMaxMagL = 0.0f;
     diagMaxBucketL = 0;
     std::fill(freqBinsL, freqBinsL + (sizeof(freqBinsL) / sizeof(freqBinsL[0])), 0.0f);
+  } else {
+    // Stereo Mode (chMode == 0): Pure Independent Dual Channel Operation
+    // Left and Right channels operate completely independently with zero cross-talk/injection.
   }
 
   // 6. Multi-Band Visual Normalization with Fast-Recovery AGC & Vivid Logarithmic Contrast
@@ -725,25 +846,24 @@ void processFft() {
     if (freqBinsR[i] > peakR) peakR = freqBinsR[i];
   }
 
-  // Low reference peak (160.0f) ensures 1% volume (-40 dBFS) tones drive full, crisp spectrum bars
-  const float minRefPeakL = 160.0f;
-  const float minRefPeakR = 160.0f;
-  static float smoothPeakL = 160.0f;
-  static float smoothPeakR = 160.0f;
+  // Minimum reference peak ensures quiet signals scale smoothly without amplifying noise
+  const float minRefPeakL = 280.0f;
+  const float minRefPeakR = 280.0f;
+  static float smoothPeakL = 280.0f;
+  static float smoothPeakR = 280.0f;
 
-  float agcDecayL = (peakL < smoothPeakL * 0.5f) ? 0.92f : 0.97f;
-  float agcDecayR = (peakR < smoothPeakR * 0.5f) ? 0.92f : 0.97f;
+  float agcDecayL = (peakL < smoothPeakL * 0.5f) ? 0.88f : 0.95f;
+  float agcDecayR = (peakR < smoothPeakR * 0.5f) ? 0.88f : 0.95f;
   smoothPeakL = std::max(peakL, std::max(smoothPeakL * agcDecayL, minRefPeakL));
   smoothPeakR = std::max(peakR, std::max(smoothPeakR * agcDecayR, minRefPeakR));
 
-  // Per-8ms frame decay factor (~0.93^3 = 0.80 per 24ms)
-  constexpr float kFastBandsDecay = 0.93f;
-  constexpr float kFastVuDecay = 0.93f;
+  // Per-8ms frame decay factor (~0.80^3 = 0.51 per 24ms -> snappy and realtime release!)
+  constexpr float kFastBandsDecay = 0.80f;
+  constexpr float kFastVuDecay = 0.78f;
 
   for (uint8_t i = 0; i < bandsLen; ++i) {
-    if (silentL || peakL <= 5.0f) {
-      bandLevelsL[i] = (chMode == 2) ? 0 : static_cast<uint8_t>(bandLevelsL[i] * kFastBandsDecay);
-      if (bandLevelsL[i] < 4) bandLevelsL[i] = 0;
+    if (silentL || peakL <= 5.0f || !gateOpenL) {
+      bandLevelsL[i] = 0;
     } else {
       float ratioL = freqBinsL[i] / smoothPeakL;
       if (std::isnan(ratioL) || std::isinf(ratioL) || ratioL < 0.0f) ratioL = 0.0f;
@@ -756,9 +876,8 @@ void processFft() {
       bandLevelsL[i] = std::max(targetL, decayedL);
     }
 
-    if (silentR || peakR <= 5.0f) {
-      bandLevelsR[i] = (chMode == 1) ? 0 : static_cast<uint8_t>(bandLevelsR[i] * kFastBandsDecay);
-      if (bandLevelsR[i] < 4) bandLevelsR[i] = 0;
+    if (silentR || peakR <= 5.0f || !gateOpenR) {
+      bandLevelsR[i] = 0;
     } else {
       float ratioR = freqBinsR[i] / smoothPeakR;
       if (std::isnan(ratioR) || std::isinf(ratioR) || ratioR < 0.0f) ratioR = 0.0f;
@@ -781,8 +900,8 @@ void processFft() {
   }
 
   // 7. Stereo VU Meters with Wide-Range Logarithmic dB Scaling (1% to 100% volume)
-  float cleanSpecPeakL = (!silentL && peakL > 0.0f) ? peakL : 0.0f;
-  float cleanSpecPeakR = (!silentR && peakR > 0.0f) ? peakR : 0.0f;
+  float cleanSpecPeakL = (!silentL && gateOpenL && peakL > 0.0f) ? peakL : 0.0f;
+  float cleanSpecPeakR = (!silentR && gateOpenR && peakR > 0.0f) ? peakR : 0.0f;
 
   // Calibrated log curve: 1% vol (~70) -> ~50/255, 10% vol (~900) -> ~145/255, 50% vol (~5450) -> ~222/255, 100% -> 254/255
   constexpr float kVuRef = 32.0f;
@@ -791,18 +910,16 @@ void processFft() {
   float vuNormR = (cleanSpecPeakR > 0.0f) ? std::min(1.0f, log10f(1.0f + cleanSpecPeakR / kVuRef) / kVuLogDenom) : 0.0f;
 
   uint8_t targetVuL = static_cast<uint8_t>(vuNormL * 255.0f);
-  if (silentL) {
-    vuLevelL = (chMode == 2) ? 0 : static_cast<uint8_t>(vuLevelL * kFastVuDecay);
-    if (vuLevelL < 4) vuLevelL = 0;
+  if (silentL || !gateOpenL) {
+    vuLevelL = 0;
   } else {
     uint8_t decayedVuL = static_cast<uint8_t>(vuLevelL * kFastVuDecay);
     vuLevelL = std::max(targetVuL, decayedVuL);
   }
 
   uint8_t targetVuR = static_cast<uint8_t>(vuNormR * 255.0f);
-  if (silentR) {
-    vuLevelR = (chMode == 1) ? 0 : static_cast<uint8_t>(vuLevelR * kFastVuDecay);
-    if (vuLevelR < 4) vuLevelR = 0;
+  if (silentR || !gateOpenR) {
+    vuLevelR = 0;
   } else {
     uint8_t decayedVuR = static_cast<uint8_t>(vuLevelR * kFastVuDecay);
     vuLevelR = std::max(targetVuR, decayedVuR);
@@ -833,27 +950,27 @@ void fillSamplesBlocking() {
       int16_t raw_data = (int16_t)(p->type1.data & 0x0FFF);
       uint8_t ch = p->type1.channel;
 
-      if (ch == ADC_CHANNEL_0) { // GPIO 36 (Right Channel)
+      if (ch == ADC_CHANNEL_3) { // GPIO 39 (Right Channel) - ADC1_CH3
         ringBufR[writeIdxR] = raw_data;
         writeIdxR = (writeIdxR + 1) & (kSampleBlock - 1);
         totalSamplesR++;
-      } else if (ch == ADC_CHANNEL_3) { // GPIO 39 (Left Channel)
+      } else if (ch == ADC_CHANNEL_6) { // GPIO 34 (Left Channel) - ADC1_CH6
         ringBufL[writeIdxL] = raw_data;
         writeIdxL = (writeIdxL + 1) & (kSampleBlock - 1);
         totalSamplesL++;
+      }
 
-        if (raw_data <= 50 || raw_data >= 4045) {
-          consecutiveClipCount++;
-          if (consecutiveClipCount >= 16) {
-            if (!isClipping) clippingCount++;
-            isClipping = true;
-            lastClipCheckMs = now_ms;
-          }
-        } else {
-          if (consecutiveClipCount > 0) consecutiveClipCount--;
-          if (now_ms - lastClipCheckMs > 500) {
-            isClipping = false;
-          }
+      if (raw_data <= 50 || raw_data >= 4045) {
+        consecutiveClipCount++;
+        if (consecutiveClipCount >= 16) {
+          if (!isClipping) clippingCount++;
+          isClipping = true;
+          lastClipCheckMs = now_ms;
+        }
+      } else {
+        if (consecutiveClipCount > 0) consecutiveClipCount--;
+        if (now_ms - lastClipCheckMs > 500) {
+          isClipping = false;
         }
       }
     }
@@ -874,16 +991,76 @@ void fillSamplesBlocking() {
   }
 }
 
+void updateDcBiasAndP2pOnly() {
+  if (!ringBufL || !ringBufR) return;
+  const uint16_t snapIdxR = writeIdxR;
+  const uint16_t snapIdxL = writeIdxL;
+
+  float dcSumL = 0.0f;
+  float dcSumR = 0.0f;
+  float minValL = 4095.0f, maxValL = 0.0f;
+  float minValR = 4095.0f, maxValR = 0.0f;
+
+  for (uint16_t i = 0; i < kSampleBlock; ++i) {
+    float sR = (float)ringBufR[(snapIdxR + i) & (kSampleBlock - 1)];
+    float sL = (float)ringBufL[(snapIdxL + i) & (kSampleBlock - 1)];
+    dcSumR += sR;
+    dcSumL += sL;
+    if (sL < minValL) minValL = sL;
+    if (sL > maxValL) maxValL = sL;
+    if (sR < minValR) minValR = sR;
+    if (sR > maxValR) maxValR = sR;
+  }
+
+  lastDcOffsetR = dcSumR / (float)kSampleBlock;
+  lastDcOffsetL = dcSumL / (float)kSampleBlock;
+  lastP2pL = (maxValL >= minValL) ? (maxValL - minValL) : 0.0f;
+  lastP2pR = (maxValR >= minValR) ? (maxValR - minValR) : 0.0f;
+}
+
 void analyzerTask(void *) {
   nextProcessMs = millis();
+  uint32_t lastStandbyBiasMs = 0;
 
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(2));
 
-    if (!enabled || std::strcmp(mode, "off") == 0 || !adcReady) {
+    if (!adcReady) {
       sampleCount = 0;
       totalSamplesL = 0;
       totalSamplesR = 0;
+      vuLevel = 0;
+      vuLevelL = 0;
+      vuLevelR = 0;
+      std::memset(bandLevelsL, 0, sizeof(bandLevelsL));
+      std::memset(bandLevelsR, 0, sizeof(bandLevelsR));
+      std::memset(bandLevels, 0, sizeof(bandLevels));
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
+    if (!enabled || std::strcmp(mode, "off") == 0) {
+      // Keep draining ADC DMA ring buffer and updating DC Bias Divider + P2P in real-time (10 Hz)
+      // without running heavy KissFFT when amplifier is in Standby or analyzer mode is OFF.
+      fillSamplesBlocking();
+      const uint32_t now = millis();
+      if (sampleCount >= kSampleBlock && (now - lastStandbyBiasMs >= 100)) {
+        updateDcBiasAndP2pOnly();
+        lastStandbyBiasMs = now;
+      }
+      vuLevel = 0;
+      vuLevelL = 0;
+      vuLevelR = 0;
+      gateOpenL = false;
+      gateOpenR = false;
+      diagMaxMagL = 0.0f;
+      diagMaxMagR = 0.0f;
+      diagMaxBucketL = 0;
+      diagMaxBucketR = 0;
+      std::memset(bandLevelsL, 0, sizeof(bandLevelsL));
+      std::memset(bandLevelsR, 0, sizeof(bandLevelsR));
+      std::memset(bandLevels, 0, sizeof(bandLevels));
+      vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
 
@@ -1112,12 +1289,12 @@ void analyzerCalibrateAdc() {
             for (size_t i = 0; i < n && totalCounts < kCalibSamples; ++i) {
                 adc_digi_output_data_t *p = (adc_digi_output_data_t *)&calibBuf[i * sizeof(adc_digi_output_data_t)];
                 uint16_t val = p->type1.data & 0x0FFF;
-                if (p->type1.channel == ADC_CHANNEL_0) {
+                if (p->type1.channel == ADC_CHANNEL_3) { // GPIO 39 (Right Channel)
                     sumR += val;
                     countsR++;
                     if (val < minR) minR = val;
                     if (val > maxR) maxR = val;
-                } else if (p->type1.channel == ADC_CHANNEL_3) {
+                } else if (p->type1.channel == ADC_CHANNEL_6) { // GPIO 34 (Left Channel)
                     sumL += val;
                     countsL++;
                     if (val < minL) minL = val;
@@ -1131,6 +1308,16 @@ void analyzerCalibrateAdc() {
     float centerR = countsR ? (float)(sumR / countsR) : ANA_ADC_CENTER;
     float centerL = countsL ? (float)(sumL / countsL) : ANA_ADC_CENTER;
     dynamicAdcCenter = centerR;
+    lastDcOffsetL = centerL;
+    lastDcOffsetR = centerR;
+    lastP2pL = (maxL >= minL) ? (float)(maxL - minL) : 0.0f;
+    lastP2pR = (maxR >= minR) ? (float)(maxR - minR) : 0.0f;
+    if (ringBufL && ringBufR) {
+        for (uint16_t i = 0; i < kSampleBlock; ++i) {
+            ringBufL[i] = (int16_t)centerL;
+            ringBufR[i] = (int16_t)centerR;
+        }
+    }
     enabled = wasEnabled;
     analyzerSaveToNvs();
 
@@ -1162,15 +1349,17 @@ void analyzerSetEnabled(bool en) {
   }
 }
 
+static const uint8_t kZeroBands[64] = {0};
+
 uint8_t analyzerGetBandsLen() { return bandsLen; }
-const uint8_t *analyzerGetBands() { return bandLevels; }
-const uint8_t *analyzerGetBandsL() { return bandLevelsL; }
-const uint8_t *analyzerGetBandsR() { return bandLevelsR; }
-uint8_t analyzerGetVu() { return vuLevel; }
-uint8_t analyzerGetVuL() { return vuLevelL; }
-uint8_t analyzerGetVuR() { return vuLevelR; }
-void analyzerGetVu(uint8_t& outVuL, uint8_t& outVuR) { outVuL = vuLevelL; outVuR = vuLevelR; }
-bool analyzerIsClipping() { return isClipping; }
+const uint8_t *analyzerGetBands() { return enabled ? bandLevels : kZeroBands; }
+const uint8_t *analyzerGetBandsL() { return enabled ? bandLevelsL : kZeroBands; }
+const uint8_t *analyzerGetBandsR() { return enabled ? bandLevelsR : kZeroBands; }
+uint8_t analyzerGetVu() { return enabled ? vuLevel : 0; }
+uint8_t analyzerGetVuL() { return enabled ? vuLevelL : 0; }
+uint8_t analyzerGetVuR() { return enabled ? vuLevelR : 0; }
+void analyzerGetVu(uint8_t& outVuL, uint8_t& outVuR) { outVuL = enabled ? vuLevelL : 0; outVuR = enabled ? vuLevelR : 0; }
+bool analyzerIsClipping() { return enabled ? isClipping : false; }
 const char *analyzerGetMode() { return mode; }
 uint16_t analyzerGetUpdateMs() { return updateMs; }
 bool analyzerEnabled() { return enabled; }
@@ -1187,6 +1376,8 @@ float    analyzerGetDiagThrL() { return diagThrL; }
 float    analyzerGetDiagThrR() { return diagThrR; }
 float    analyzerGetDcOffsetL() { return lastDcOffsetL; }
 float    analyzerGetDcOffsetR() { return lastDcOffsetR; }
+float    analyzerGetP2pL() { return lastP2pL; }
+float    analyzerGetP2pR() { return lastP2pR; }
 uint32_t analyzerGetSamplesR() { return totalSamplesR; }
 uint32_t analyzerGetSamplesL() { return totalSamplesL; }
 int16_t  analyzerGetRawR0() { return ringBufR ? ringBufR[(writeIdxR + kSampleBlock - 1) & (kSampleBlock - 1)] : -1; }
@@ -1220,6 +1411,8 @@ float    analyzerGetDiagThrL() { return 0.0f; }
 float    analyzerGetDiagThrR() { return 0.0f; }
 float    analyzerGetDcOffsetL() { return 0.0f; }
 float    analyzerGetDcOffsetR() { return 0.0f; }
+float    analyzerGetP2pL() { return 0.0f; }
+float    analyzerGetP2pR() { return 0.0f; }
 uint32_t analyzerGetSamplesR() { return 0; }
 uint32_t analyzerGetSamplesL() { return 0; }
 int16_t  analyzerGetRawR0() { return -1; }

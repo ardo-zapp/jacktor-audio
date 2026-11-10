@@ -51,6 +51,23 @@ void     stateSetAutoSenseTimeout(uint32_t min);
 uint8_t  stateAutoSenseThresh();
 void     stateSetAutoSenseThresh(uint8_t thr);
 
+// -------- GAIA Hardware DSP (NVS Persisted) --------
+bool     stateGetBassBoost();
+void     stateSetBassBoost(bool en);
+
+bool     stateGet3dAudio();
+void     stateSet3dAudio(bool en);
+
+uint8_t  stateGetChannelMode();
+void     stateSetChannelMode(uint8_t mode);
+
+uint8_t  stateGetEqPreset();
+void     stateSetEqPreset(uint8_t p);
+
+// -------- DS18B20 Multi-Sensor ROM Mapping (NVS Persisted) --------
+uint64_t stateGetTempRom(uint8_t role);
+void     stateSetTempRom(uint8_t role, uint64_t rom);
+
 // -------- Live Tuning Parameters --------
 float    statePidKp();
 void     stateSetPidKp(float kp);

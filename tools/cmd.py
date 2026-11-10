@@ -16,6 +16,7 @@ import serial.tools.list_ports
 import sys
 import time
 import json
+import socket
 from datetime import datetime
 import os
 import platform
@@ -39,6 +40,18 @@ import threading
 import re
 import subprocess
 import base64
+from pathlib import Path
+
+TOOLS_DIR = Path(__file__).resolve().parent
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIR))
+
+try:
+    from discover import discover_jacktor_panel, SshSession, verify_jacktor_ip
+except ImportError:
+    pass
+
+GLOBAL_SSH_SESSION = None
 
 SELECTED_PORT = None
 
@@ -95,6 +108,8 @@ class QCCAudioGenerator:
         self.b4 = 0.0
         self.b5 = 0.0
         self.b6 = 0.0
+        self.is_remote = False
+        self.remote_card_num = 1
 
         self.scan_device()
 
@@ -105,6 +120,35 @@ class QCCAudioGenerator:
     def scan_device(self):
         detected_card = None
         detected_name = None
+
+        # Check remote panel via SSH if connected
+        global GLOBAL_SSH_SESSION
+        if GLOBAL_SSH_SESSION:
+            try:
+                res = GLOBAL_SSH_SESSION.run_cmd("cat /proc/asound/cards 2>/dev/null", check=False)
+                content = res.stdout or ""
+                for line in content.splitlines():
+                    m = re.match(r"^\s*(\d+)\s+\[([^\]]+)\]:\s*(.*)", line)
+                    if m:
+                        c_idx, c_id, c_desc = m.group(1), m.group(2).strip(), m.group(3).strip()
+                        combined = (c_id + " " + c_desc).lower()
+                        if any(kw in combined for kw in ["qcc", "qualcomm", "csr"]):
+                            detected_card = c_id
+                            self.remote_card_num = int(c_idx)
+                            detected_name = f"{c_desc} ({c_id})"
+                            break
+                        elif "usb" in combined and "audio" in combined and not detected_card:
+                            detected_card = c_id
+                            self.remote_card_num = int(c_idx)
+                            detected_name = f"{c_desc} ({c_id})"
+                if detected_card:
+                    self.target_device = f"card {self.remote_card_num}"
+                    self.device_name = f"{detected_name} [Remote Panel {GLOBAL_SSH_SESSION.host}]"
+                    self.device_ready = True
+                    self.is_remote = True
+                    return True
+            except Exception as e:
+                self.log(f"[WARN] Error scan remote /proc/asound/cards: {e}")
 
         try:
             if os.path.exists("/proc/asound/cards"):
@@ -142,6 +186,7 @@ class QCCAudioGenerator:
             self.target_device = f"plughw:CARD={detected_card},DEV=0"
             self.device_name = f"{detected_name} [{detected_card}]"
             self.device_ready = True
+            self.is_remote = False
             try:
                 subprocess.run(
                     ["amixer", "-c", str(detected_card), "sset", "PCM", "100%", "unmute"],
@@ -156,6 +201,7 @@ class QCCAudioGenerator:
             self.target_device = None
             self.device_name = "USB DAC QCC (Offline / Standby)"
             self.device_ready = False
+            self.is_remote = False
             return False
 
     def get_target_band(self, freq=None):
@@ -255,14 +301,37 @@ class QCCAudioGenerator:
             self.log("[PLAY] USB DAC QCC Offline -> Starting Virtual Test Stream (aplay null)...")
 
         try:
-            cmd = [
-                "aplay", "-D", device_to_use,
-                "-t", "raw", "-f", "S16_LE", "-c", "2", "-r", str(self.sample_rate),
-                "--buffer-time=60000", "--period-time=15000", "-q"
-            ]
+            global GLOBAL_SSH_SESSION
+            if self.is_remote and GLOBAL_SSH_SESSION:
+                # Safe 2048 period size and 4 periods (185ms ring buffer) to eliminate underruns/stuttering
+                cmd = GLOBAL_SSH_SESSION.get_ssh_base_cmd() + [f"tinyplay /dev/stdin -D {self.remote_card_num} -d 0 -p 2048 -n 4"]
+            else:
+                cmd = [
+                    "aplay", "-D", device_to_use,
+                    "-t", "raw", "-f", "S16_LE", "-c", "2", "-r", str(self.sample_rate),
+                    "--buffer-time=60000", "--period-time=15000", "-q"
+                ]
             self._proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, bufsize=0
             )
+            if self.is_remote and self._proc and self._proc.stdin:
+                # Write 44-byte safe 24-bit 44.1kHz WAV header so tinyplay recognizes streaming PCM
+                hdr = bytearray()
+                hdr += b"RIFF"
+                hdr += struct.pack("<I", 0x7FFFFFFF)
+                hdr += b"WAVEfmt "
+                hdr += struct.pack("<I", 16)
+                hdr += struct.pack("<H", 1)
+                hdr += struct.pack("<H", 2)
+                hdr += struct.pack("<I", self.sample_rate)
+                hdr += struct.pack("<I", self.sample_rate * 2 * 3)
+                hdr += struct.pack("<H", 6)
+                hdr += struct.pack("<H", 24)
+                hdr += b"data"
+                hdr += struct.pack("<I", 0x7FFFFFFF)
+                self._proc.stdin.write(hdr)
+                self._proc.stdin.flush()
+
             self._stop_event.clear()
             self.is_playing = True
             self.sweep_start_time = time.time()
@@ -293,7 +362,23 @@ class QCCAudioGenerator:
                 except Exception:
                     pass
             self._proc = None
-        self.log("[PLAY] Playback STOPPED.")
+
+        # When stopping audio test playback, restore volume & web settings to ensure audio quality returns to normal
+        if self.is_remote:
+            global GLOBAL_SSH_SESSION
+            if GLOBAL_SSH_SESSION:
+                try:
+                    GLOBAL_SSH_SESSION.run_cmd(
+                        "/data/adb/modules/jacktor-audio-framework/system/bin/audio-test stop >/dev/null 2>&1 || true; "
+                        "if [ -x /data/adb/modules/jacktor-audio-framework/webroot/cgi-bin/api.sh ]; then "
+                        "  sh /data/adb/modules/jacktor-audio-framework/webroot/cgi-bin/api.sh set_gain >/dev/null 2>&1 || true; "
+                        "fi",
+                        check=False
+                    )
+                except Exception:
+                    pass
+
+        self.log("[PLAY] Playback STOPPED. Audio quality restored to web settings.")
 
     def toggle_play(self):
         if self.is_playing:
@@ -302,8 +387,22 @@ class QCCAudioGenerator:
             self.start()
 
     def _worker_loop(self):
-        frames = 1024
+        frames = 2048 if self.is_remote else 1024
         chunk_dur = frames / float(self.sample_rate)
+
+        # Pre-buffer: prime remote buffer upfront with 2 blocks to avoid network starvation
+        if self.is_remote and self._proc and self._proc.stdin:
+            try:
+                c_init = self._gen_sine(self.frequency, self.amplitude, frames, self.channel)
+                c24_init = bytearray(len(c_init) // 2 * 3)
+                c24_init[1::3] = c_init[0::2]
+                c24_init[2::3] = c_init[1::2]
+                self._proc.stdin.write(c24_init)
+                self._proc.stdin.write(c24_init)
+                self._proc.stdin.flush()
+            except Exception:
+                pass
+
         next_t = time.perf_counter()
 
         while not self._stop_event.is_set():
@@ -333,7 +432,14 @@ class QCCAudioGenerator:
                 else:
                     chunk = self._gen_sine(self.frequency, self.amplitude, frames, self.channel)
 
-                self._proc.stdin.write(chunk)
+                if self.is_remote:
+                    # Convert 16-bit PCM chunk to 24-bit S24_3LE via fast C slice assignment
+                    chunk24 = bytearray(len(chunk) // 2 * 3)
+                    chunk24[1::3] = chunk[0::2]
+                    chunk24[2::3] = chunk[1::2]
+                    self._proc.stdin.write(chunk24)
+                else:
+                    self._proc.stdin.write(chunk)
             except (BrokenPipeError, OSError, ValueError):
                 if not self._stop_event.is_set() and self.is_playing:
                     self.log("[WARN] Audio pipe broken (USB device might be disconnected or in standby).")
@@ -483,6 +589,636 @@ class SafeSerial(serial.Serial):
                 termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
             except Exception:
                 pass
+
+
+class ApiSerialBridge:
+    """
+    High-Speed HTTP REST & SSE Serial Bridge connecting to the Android panel via jacktor-api (Port 80).
+    Uses token authentication with encrypted machine-key credentials.
+    Eliminates OpenSSH shell pipes, ADB, and direct TCP 7777 sockets.
+    Port format: 'api:<host>' (e.g. 'api:<panel_ip>').
+    """
+    def __init__(self, port=None, baudrate=921600, timeout=0, write_timeout=1):
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.write_timeout = write_timeout
+        self.host = self._parse_host(port)
+        self.client = None
+        self._rx_thread = None
+        self._rx_buf = bytearray()
+        self._lock = threading.Lock()
+        self._opened = False
+        self._stop_event = threading.Event()
+
+    @staticmethod
+    def _parse_host(port_spec):
+        raw = str(port_spec or "")
+        if raw.lower().startswith("api:"):
+            raw = raw[4:]
+        if ":" in raw:
+            raw = raw.split(":", 1)[0]
+        return raw.strip() or "127.0.0.1"
+
+    @property
+    def is_open(self):
+        return bool(self._opened and self.client is not None)
+
+    def open(self):
+        if self._opened:
+            return
+        from auth_client import JacktorApiClient
+        self.client = JacktorApiClient.authenticate(host=self.host, interactive=True)
+        self._opened = True
+        self._stop_event.clear()
+        self._rx_thread = threading.Thread(target=self._rx_worker, daemon=True)
+        self._rx_thread.start()
+
+    def _rx_worker(self):
+        import time
+        import urllib.request
+        import urllib.parse
+        while self._opened and not self._stop_event.is_set():
+            try:
+                url = f"{self.client.base_url}?action=stream&token={urllib.parse.quote(self.client.token)}"
+                req = urllib.request.Request(url, headers={"X-Jacktor-Token": self.client.token})
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    for raw_line in resp:
+                        if self._stop_event.is_set() or not self._opened:
+                            break
+                        line_str = raw_line.decode("utf-8", errors="replace").strip()
+                        if line_str.startswith("data: "):
+                            payload = line_str[6:].strip() + "\n"
+                            with self._lock:
+                                self._rx_buf.extend(payload.encode("utf-8", errors="replace"))
+                                if len(self._rx_buf) > 65536:
+                                    del self._rx_buf[:32768]
+            except Exception:
+                if self._stop_event.is_set() or not self._opened:
+                    break
+                time.sleep(1.0)
+
+    @property
+    def in_waiting(self):
+        with self._lock:
+            return len(self._rx_buf)
+
+    def read(self, size=1):
+        import time
+        start_t = time.time()
+        res = bytearray()
+        while self._opened and len(res) < size:
+            with self._lock:
+                if self._rx_buf:
+                    take = min(size - len(res), len(self._rx_buf))
+                    res.extend(self._rx_buf[:take])
+                    del self._rx_buf[:take]
+                    continue
+            if self.timeout <= 0:
+                break
+            if time.time() - start_t >= self.timeout:
+                break
+            time.sleep(0.002)
+        return bytes(res)
+
+    def readline(self, size=-1):
+        import time
+        start_t = time.time()
+        res = bytearray()
+        while self._opened:
+            with self._lock:
+                nl_idx = self._rx_buf.find(b"\n")
+                if nl_idx != -1:
+                    line_len = nl_idx + 1
+                    if size > 0:
+                        line_len = min(line_len, size)
+                    res.extend(self._rx_buf[:line_len])
+                    del self._rx_buf[:line_len]
+                    return bytes(res)
+                elif size > 0 and len(self._rx_buf) >= size:
+                    res.extend(self._rx_buf[:size])
+                    del self._rx_buf[:size]
+                    return bytes(res)
+            if self.timeout <= 0:
+                break
+            if time.time() - start_t >= self.timeout:
+                break
+            time.sleep(0.002)
+        return bytes(res)
+
+    def write(self, data):
+        if not self._opened or not self.client:
+            return 0
+        try:
+            if isinstance(data, (bytes, bytearray)):
+                cmd_str = data.decode("utf-8", errors="replace").strip()
+            else:
+                cmd_str = str(data).strip()
+            if cmd_str:
+                self.client.send_amp_cmd(cmd_str)
+            return len(data)
+        except Exception:
+            return 0
+
+    def reset_input_buffer(self):
+        with self._lock:
+            self._rx_buf.clear()
+
+    def reset_output_buffer(self):
+        pass
+
+    def close(self):
+        self._opened = False
+        self._stop_event.set()
+        self.client = None
+        with self._lock:
+            self._rx_buf.clear()
+
+
+class TcpSerialBridge:
+    """
+    Direct TCP Socket Serial Bridge connecting to the panel's socat daemon (Port 7777).
+    Eliminates all hardware serial contention between cmd.py and the Android panel app!
+    Port format: 'tcp:<host>:<port>' (e.g. 'tcp:<panel_ip>:7777').
+    """
+    def __init__(self, port=None, baudrate=115200, timeout=0, write_timeout=1):
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self.write_timeout = write_timeout
+        self.host, self.tcp_port = self._parse_port(port)
+        self._sock = None
+        self._rx_thread = None
+        self._rx_buf = bytearray()
+        self._lock = threading.Lock()
+        self._opened = False
+
+    @staticmethod
+    def _parse_port(port_spec):
+        raw = str(port_spec or "")
+        if raw.lower().startswith("tcp:"):
+            raw = raw[4:]
+        host = "127.0.0.1"
+        tcp_port = 7777
+        if ":" in raw:
+            parts = raw.split(":", 1)
+            host = parts[0].strip() or host
+            if parts[1].isdigit():
+                tcp_port = int(parts[1])
+        elif raw.strip():
+            host = raw.strip()
+        return host, tcp_port
+
+    @property
+    def is_open(self):
+        return bool(self._opened and self._sock is not None)
+
+    def open(self):
+        if self._opened:
+            return
+        import socket
+        try:
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self._sock.settimeout(3.5)
+            self._sock.connect((self.host, self.tcp_port))
+            self._sock.settimeout(None)
+            self._opened = True
+            self._rx_thread = threading.Thread(target=self._rx_worker, daemon=True)
+            self._rx_thread.start()
+        except Exception as e:
+            self.close()
+            raise OSError(f"Failed to connect to TCP Serial Bridge at {self.host}:{self.tcp_port} -> {e}")
+
+    def _rx_worker(self):
+        while self._opened and self._sock:
+            try:
+                data = self._sock.recv(4096)
+                if not data:
+                    break
+                with self._lock:
+                    self._rx_buf.extend(data)
+                    if len(self._rx_buf) > 1048576:
+                        del self._rx_buf[:524288]
+            except Exception:
+                break
+        self._opened = False
+
+    def read(self, size=1):
+        with self._lock:
+            if not self._rx_buf:
+                return b""
+            if size >= len(self._rx_buf):
+                res = bytes(self._rx_buf)
+                self._rx_buf.clear()
+                return res
+            res = bytes(self._rx_buf[:size])
+            del self._rx_buf[:size]
+            return res
+
+    def write(self, data):
+        if not self._opened or not self._sock:
+            raise OSError("TCP Serial Bridge closed")
+        try:
+            if isinstance(data, str):
+                data = data.encode("utf-8")
+            self._sock.sendall(data)
+            return len(data)
+        except Exception as e:
+            self.close()
+            raise OSError(f"TCP Serial Bridge write failed: {e}")
+
+    def flush(self):
+        pass
+
+    def reset_input_buffer(self):
+        with self._lock:
+            self._rx_buf.clear()
+
+    def reset_output_buffer(self):
+        pass
+
+    @property
+    def in_waiting(self):
+        with self._lock:
+            return len(self._rx_buf)
+
+    def close(self):
+        self._opened = False
+        if self._sock:
+            try:
+                self._sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+
+
+class SshSerialBridge:
+    """
+    Full-duplex persistent SSH serial bridge that implements the pyserial Serial
+    interface over an authenticated SSH shell pipe to /dev/ttyUSBx @ 921600/115200 baud.
+    Port format: 'ssh:<user>@<host>[:<port>]:/dev/ttyUSB0' or 'ssh:<host>:/dev/ttyUSB0'.
+    """
+    def __init__(self, port=None, baudrate=921600, timeout=0, write_timeout=1, ssh_session=None):
+        self.port = port
+        self.baudrate = int(baudrate or 921600)
+        self.timeout = timeout
+        self.write_timeout = write_timeout
+        self.user, self.host, self.ssh_port, self.remote_tty = self._parse_port(port)
+        global GLOBAL_SSH_SESSION
+        self.ssh_session = ssh_session or GLOBAL_SSH_SESSION
+        if not self.ssh_session or self.ssh_session.host != self.host or self.ssh_session.port != self.ssh_port:
+            self.ssh_session = SshSession(self.host, user=self.user, port=self.ssh_port)
+            GLOBAL_SSH_SESSION = self.ssh_session
+        self._proc = None
+        self._rx_thread = None
+        self._rx_buf = bytearray()
+        self._lock = threading.Lock()
+        self._opened = False
+
+    @staticmethod
+    def _parse_port(port_spec):
+        raw = str(port_spec or "")
+        # Handle both ssh: and sshtcp: prefixes
+        if raw.lower().startswith("sshtcp:"):
+            raw = raw[7:]
+        elif raw.lower().startswith("ssh:"):
+            raw = raw[4:]
+        user = "root"
+        host = "127.0.0.1"
+        ssh_port = 22
+        remote_tty = "/dev/ttyUSB0"
+
+        if ":/dev/" in raw:
+            conn_part, tty_part = raw.split(":/dev/", 1)
+            remote_tty = "/dev/" + tty_part.strip()
+            raw = conn_part
+
+        if "@" in raw:
+            user, raw = raw.split("@", 1)
+        if ":" in raw:
+            h_part, p_part = raw.split(":", 1)
+            host = h_part.strip() or host
+            if p_part.isdigit():
+                ssh_port = int(p_part)
+        elif raw.strip():
+            host = raw.strip()
+
+        return user, host, ssh_port, remote_tty
+
+    @property
+    def is_open(self):
+        return bool(self._opened and self._proc is not None and self._proc.poll() is None)
+
+    @property
+    def in_waiting(self):
+        if not self.is_open:
+            raise OSError("SSH serial bridge closed")
+        with self._lock:
+            return len(self._rx_buf)
+
+    def open(self):
+        self.close()
+        self.user, self.host, self.ssh_port, self.remote_tty = self._parse_port(self.port)
+        check = self.ssh_session.run_cmd(
+            f"ls {self.remote_tty} >/dev/null 2>&1 && pkill -f \"^cat {self.remote_tty}\" 2>/dev/null; ls {self.remote_tty} >/dev/null 2>&1 && echo OK",
+            check=False
+        )
+        if "OK" not in (check.stdout or ""):
+            raise OSError(f"Remote TTY {self.remote_tty} not found via SSH on {self.user}@{self.host}:{self.ssh_port}")
+
+        remote_script = (
+            f"stty -F {self.remote_tty} {self.baudrate} raw -echo -echoe -echok -hupcl 2>/dev/null; "
+            f"cat {self.remote_tty} & pid=$!; "
+            f"trap \"kill $pid 2>/dev/null\" EXIT INT TERM; "
+            f"cat > {self.remote_tty}"
+        )
+        ssh_cmd = self.ssh_session.get_ssh_base_cmd() + [remote_script]
+        self._proc = subprocess.Popen(
+            ssh_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+            env=self.ssh_session.env
+        )
+        self._opened = True
+        self._rx_thread = threading.Thread(target=self._read_worker, daemon=True)
+        self._rx_thread.start()
+
+    def _read_worker(self):
+        proc = self._proc
+        if not proc or not proc.stdout:
+            return
+        while self._opened and proc.poll() is None:
+            try:
+                chunk = proc.stdout.read(512)
+                if not chunk:
+                    break
+                with self._lock:
+                    self._rx_buf.extend(chunk)
+            except Exception:
+                break
+        self._opened = False
+
+    def read(self, size=1):
+        if not self.is_open and not self._rx_buf:
+            return b""
+        end_time = time.time() + (self.timeout or 0)
+        while True:
+            with self._lock:
+                if len(self._rx_buf) >= size:
+                    data = bytes(self._rx_buf[:size])
+                    del self._rx_buf[:size]
+                    return data
+                if self.timeout == 0 or time.time() >= end_time or not self.is_open:
+                    data = bytes(self._rx_buf)
+                    self._rx_buf.clear()
+                    return data
+            time.sleep(0.002)
+
+    def write(self, data):
+        if not self.is_open or not self._proc or not self._proc.stdin:
+            raise OSError("SSH serial bridge closed")
+        try:
+            self._proc.stdin.write(data)
+            self._proc.stdin.flush()
+            return len(data)
+        except Exception as e:
+            self.close()
+            raise OSError(f"SSH serial write failed: {e}")
+
+    def reset_input_buffer(self):
+        with self._lock:
+            self._rx_buf.clear()
+
+    def reset_output_buffer(self):
+        pass
+
+    def flush(self):
+        if self.is_open and self._proc and self._proc.stdin:
+            try:
+                self._proc.stdin.flush()
+            except Exception:
+                pass
+
+    def close(self):
+        self._opened = False
+        proc = self._proc
+        self._proc = None
+        if proc:
+            try:
+                if proc.stdin:
+                    proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except Exception:
+                pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=0.5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        with self._lock:
+            self._rx_buf.clear()
+
+
+class SshTcpSerialBridge:
+    """
+    SSH-tunneled TCP Serial Bridge connecting to a TCP port on the remote panel via SSH.
+    Uses the authenticated SSH session to run 'socat - TCP:127.0.0.1:7777' (or nc) on the panel,
+    piping the serial data through the SSH stdin/stdout stream.
+    Port format: 'sshtcp:<user>@<host>[:<port>]:<remote_host>:<remote_port>'
+    or uses GLOBAL_SSH_SESSION if available.
+    """
+    def __init__(self, port=None, baudrate=115200, timeout=0, write_timeout=1, ssh_session=None):
+        self.port = port
+        self.baudrate = int(baudrate or 115200)
+        self.timeout = timeout
+        self.write_timeout = write_timeout
+        self.user, self.host, self.ssh_port, self.remote_host, self.remote_port = self._parse_port(port)
+        global GLOBAL_SSH_SESSION
+        self.ssh_session = ssh_session or GLOBAL_SSH_SESSION
+        if not self.ssh_session or self.ssh_session.host != self.host or self.ssh_session.port != self.ssh_port:
+            self.ssh_session = SshSession(self.host, user=self.user, port=self.ssh_port)
+            GLOBAL_SSH_SESSION = self.ssh_session
+        self._proc = None
+        self._rx_thread = None
+        self._rx_buf = bytearray()
+        self._lock = threading.Lock()
+        self._opened = False
+
+    @staticmethod
+    def _parse_port(port_spec):
+        raw = str(port_spec or "")
+        if raw.lower().startswith("sshtcp:"):
+            raw = raw[7:]
+        user = "root"
+        host = "127.0.0.1"
+        ssh_port = 22
+        remote_host = "127.0.0.1"
+        remote_port = 7777
+
+        # Format: user@host:ssh_port:remote_host:remote_port
+        if ":" in raw:
+            parts = raw.split(":")
+            if len(parts) >= 4:
+                # user@host:ssh_port:remote_host:remote_port (4 parts after split)
+                user_host = parts[0]
+                ssh_port = int(parts[1]) if parts[1].isdigit() else 22
+                remote_host = parts[2]
+                remote_port = int(parts[3]) if parts[3].isdigit() else 7777
+                if "@" in user_host:
+                    user, host = user_host.split("@", 1)
+                else:
+                    host = user_host
+            elif len(parts) >= 3:
+                # host:ssh_port:remote_port (remote_host defaults to 127.0.0.1)
+                host = parts[0]
+                ssh_port = int(parts[1]) if parts[1].isdigit() else 22
+                remote_port = int(parts[2]) if parts[2].isdigit() else 7777
+            elif len(parts) >= 2:
+                # host:remote_port
+                host = parts[0]
+                remote_port = int(parts[1]) if parts[1].isdigit() else 7777
+            else:
+                host = raw.strip()
+        elif raw.strip():
+            host = raw.strip()
+
+        return user, host, ssh_port, remote_host, remote_port
+
+    @property
+    def is_open(self):
+        return bool(self._opened and self._proc is not None and self._proc.poll() is None)
+
+    @property
+    def in_waiting(self):
+        if not self.is_open:
+            raise OSError("SSH TCP serial bridge closed")
+        with self._lock:
+            return len(self._rx_buf)
+
+    def open(self):
+        self.close()
+        self.user, self.host, self.ssh_port, self.remote_host, self.remote_port = self._parse_port(self.port)
+        # Verify SSH session works
+        check = self.ssh_session.run_cmd("echo OK", check=False)
+        if "OK" not in (check.stdout or ""):
+            raise OSError(f"SSH session to {self.user}@{self.host}:{self.ssh_port} failed")
+
+        # Use socat on the panel to connect to localhost:7777, or fall back to nc
+        # socat is preferred as it handles binary data cleanly
+        remote_script = (
+            f"command -v socat >/dev/null 2>&1 && exec socat - TCP:{self.remote_host}:{self.remote_port} "
+            f"|| exec nc {self.remote_host} {self.remote_port}"
+        )
+        ssh_cmd = self.ssh_session.get_ssh_base_cmd() + [remote_script]
+        self._proc = subprocess.Popen(
+            ssh_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+            env=self.ssh_session.env
+        )
+        self._opened = True
+        self._rx_thread = threading.Thread(target=self._read_worker, daemon=True)
+        self._rx_thread.start()
+
+    def _read_worker(self):
+        proc = self._proc
+        if not proc or not proc.stdout:
+            return
+        while self._opened and proc.poll() is None:
+            try:
+                chunk = proc.stdout.read(512)
+                if not chunk:
+                    break
+                with self._lock:
+                    self._rx_buf.extend(chunk)
+            except Exception:
+                break
+        self._opened = False
+
+    def read(self, size=1):
+        if not self.is_open and not self._rx_buf:
+            return b""
+        end_time = time.time() + (self.timeout or 0)
+        while True:
+            with self._lock:
+                if len(self._rx_buf) >= size:
+                    data = bytes(self._rx_buf[:size])
+                    del self._rx_buf[:size]
+                    return data
+                if self.timeout == 0 or time.time() >= end_time or not self.is_open:
+                    data = bytes(self._rx_buf)
+                    self._rx_buf.clear()
+                    return data
+            time.sleep(0.002)
+
+    def write(self, data):
+        if not self.is_open or not self._proc or not self._proc.stdin:
+            raise OSError("SSH TCP serial bridge closed")
+        try:
+            if isinstance(data, str):
+                data = data.encode("utf-8")
+            self._proc.stdin.write(data)
+            self._proc.stdin.flush()
+            return len(data)
+        except Exception as e:
+            self.close()
+            raise OSError(f"SSH TCP serial write failed: {e}")
+
+    def reset_input_buffer(self):
+        with self._lock:
+            self._rx_buf.clear()
+
+    def reset_output_buffer(self):
+        pass
+
+    def flush(self):
+        if self.is_open and self._proc and self._proc.stdin:
+            try:
+                self._proc.stdin.flush()
+            except Exception:
+                pass
+
+    def close(self):
+        self._opened = False
+        proc = self._proc
+        self._proc = None
+        if proc:
+            try:
+                if proc.stdin:
+                    proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except Exception:
+                pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=0.5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        with self._lock:
+            self._rx_buf.clear()
 
 
 class AdbSerialBridge:
@@ -640,7 +1376,24 @@ class AdbSerialBridge:
 
 
 def open_serial_port(port_spec, baudrate=921600, timeout=0, write_timeout=1):
-    if str(port_spec or "").lower().startswith("adb:"):
+    spec = str(port_spec or "").lower()
+    if spec.startswith("api:"):
+        ser = ApiSerialBridge(port=port_spec, baudrate=baudrate, timeout=timeout, write_timeout=write_timeout)
+        ser.open()
+        return ser
+    if spec.startswith("tcp:"):
+        ser = TcpSerialBridge(port=port_spec, baudrate=baudrate, timeout=timeout, write_timeout=write_timeout)
+        ser.open()
+        return ser
+    if spec.startswith("ssh:"):
+        ser = SshSerialBridge(port=port_spec, baudrate=baudrate, timeout=timeout, write_timeout=write_timeout)
+        ser.open()
+        return ser
+    if spec.startswith("sshtcp:"):
+        ser = SshTcpSerialBridge(port=port_spec, baudrate=baudrate, timeout=timeout, write_timeout=write_timeout)
+        ser.open()
+        return ser
+    if spec.startswith("adb:"):
         ser = AdbSerialBridge(port=port_spec, baudrate=baudrate, timeout=timeout, write_timeout=write_timeout)
         ser.open()
         return ser
@@ -867,22 +1620,6 @@ class JacktorHybridMonitor:
 
     def _load_cached_smps_volt(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        candidates = [
-            os.path.join(base_dir, ".last_smps_volt"),
-            os.path.join(base_dir, "tools", ".last_smps_volt"),
-            ".last_smps_volt",
-            "tools/.last_smps_volt"
-        ]
-        for fn in candidates:
-            if os.path.exists(fn):
-                try:
-                    with open(fn, 'r') as f:
-                        v = float(f.read().strip())
-                        if v > 10.0:
-                            return v
-                except Exception:
-                    pass
-
         log_candidates = [
             os.path.join(base_dir, "log.txt"),
             os.path.join(base_dir, "tools", "log.txt"),
@@ -906,15 +1643,8 @@ class JacktorHybridMonitor:
         return 58.0
 
     def _save_cached_smps_volt(self, volt):
-        if volt <= 10.0:
-            return
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        cache_file = os.path.join(base_dir, ".last_smps_volt")
-        try:
-            with open(cache_file, "w") as f:
-                f.write(f"{volt:.1f}\n")
-        except Exception:
-            pass
+        # File .last_smps_volt is explicitly disabled per project policy
+        pass
 
     def _update_step3_log_line(self, volt):
         if not hasattr(self, 'log_lines') or volt <= 10.0:
@@ -1367,52 +2097,53 @@ class JacktorHybridMonitor:
         except Exception:
             pass
 
-    def _draw_vu_channel(self, r, label, filled, max_bar_w, val):
+    def _draw_vu_channel(self, r, label, filled, max_bar_w, val, chan="L"):
         if r >= self.height:
             return
         self.stdscr.move(r, 0)
         self.stdscr.clrtoeol()
 
         has_col = curses.has_colors()
+        # High-contrast distinctive colors for Left (Cyan/Green) vs Right (Yellow/Amber)
+        if not has_col:
+            lbl_c = curses.A_BOLD
+        elif chan == "L":
+            lbl_c = curses.color_pair(5) | curses.A_BOLD  # Green / Cyan for Left
+        else:
+            lbl_c = curses.color_pair(3) | curses.A_BOLD  # Yellow / Amber for Right
+
         lbl_text = f"{label} ["
-        self.stdscr.addstr(r, 0, lbl_text, (curses.color_pair(2) | curses.A_BOLD) if has_col else curses.A_BOLD)
+        self.stdscr.addstr(r, 0, lbl_text, lbl_c)
         cur_x = len(lbl_text)
 
-        # Gradient thresholds: 60% green, 85% yellow, above red
+        # Gradient thresholds with visual zone demarcation
         g_lim = int(max_bar_w * 0.60)
         y_lim = int(max_bar_w * 0.85)
 
-        for i in range(filled):
+        for i in range(max_bar_w):
             if cur_x + i >= self.width - 12:
                 break
-            if not has_col:
-                c = curses.A_NORMAL
-            elif i < g_lim:
-                c = curses.color_pair(5) | curses.A_BOLD
-            elif i < y_lim:
-                c = curses.color_pair(3) | curses.A_BOLD
+            
+            # Segmented LED block: use ■ for discrete, non-merging audio LED segments
+            if i < filled:
+                if not has_col:
+                    c = curses.A_NORMAL
+                elif i < g_lim:
+                    c = curses.color_pair(5) | curses.A_BOLD  # Green Normal Zone
+                elif i < y_lim:
+                    c = curses.color_pair(3) | curses.A_BOLD  # Yellow Warning Zone
+                else:
+                    c = curses.color_pair(4) | curses.A_BOLD  # Red Peak Zone
+                ch = "■"
             else:
-                c = curses.color_pair(4) | curses.A_BOLD
-            self.stdscr.addstr(r, cur_x + i, "█", c)
+                c = (curses.color_pair(1) | curses.A_DIM) if has_col else curses.A_DIM
+                ch = "·"
 
-        empty_len = max_bar_w - filled
-        if empty_len > 0:
-            dim_c = (curses.color_pair(1) | curses.A_DIM) if has_col else curses.A_DIM
-            track_str = "·" * empty_len
-            avail = max(0, self.width - 12 - (cur_x + filled))
-            self.stdscr.addstr(r, cur_x + filled, track_str[:avail], dim_c)
+            self.stdscr.addstr(r, cur_x + i, ch, c)
 
         cur_x += max_bar_w
         if cur_x < self.width - 9:
-            if val > 215:
-                val_c = (curses.color_pair(4) | curses.A_BOLD) if has_col else curses.A_BOLD
-            elif val > 150:
-                val_c = (curses.color_pair(3)) if has_col else curses.A_NORMAL
-            elif val > 0:
-                val_c = (curses.color_pair(5)) if has_col else curses.A_NORMAL
-            else:
-                val_c = (curses.color_pair(1) | curses.A_DIM) if has_col else curses.A_DIM
-
+            val_c = curses.color_pair(1) if has_col else curses.A_NORMAL
             self.stdscr.addstr(r, cur_x, f"] {val:3d}/255", val_c)
 
     def draw_vu_bar(self, force=False):
@@ -1440,6 +2171,12 @@ class JacktorHybridMonitor:
             vu_l = max(0, min(255, vu_l))
             vu_r = max(0, min(255, vu_r))
 
+            # Noise floor squelch: suppress residual ADC noise floor when no audio is playing
+            if vu_l < 10:
+                vu_l = 0
+            if vu_r < 10:
+                vu_r = 0
+
             box_w = min(60, max(30, self.width))
             max_bar_width = max(10, box_w - 24)
 
@@ -1449,13 +2186,39 @@ class JacktorHybridMonitor:
             filled_r = int(vu_r / 255.0 * max_bar_width) if vu_r > 0 else 0
             filled_r = max(0, min(max_bar_width, filled_r))
 
-            self._draw_vu_channel(self.vu_l_y, "VU L", filled_l, max_bar_width, vu_l)
-            self._draw_vu_channel(self.vu_r_y, "VU R", filled_r, max_bar_width, vu_r)
+            self._draw_vu_channel(self.vu_l_y, "VU L", filled_l, max_bar_width, vu_l, chan="L")
+            self._draw_vu_channel(self.vu_r_y, "VU R", filled_r, max_bar_width, vu_r, chan="R")
         except Exception:
             pass
 
 
-    def connect(self):
+    def connect(self, silent=False):
+        # 1. Do not interrupt active firmware flashing
+        lock_file = "/tmp/jacktor_flashing.lock"
+        if os.path.exists(lock_file):
+            stale = True
+            try:
+                with open(lock_file, "r") as f:
+                    content = f.read().strip()
+                if content.isdigit():
+                    pid = int(content)
+                    os.kill(pid, 0)
+                    stale = False
+            except (OSError, ProcessLookupError, PermissionError):
+                stale = True
+            except Exception:
+                stale = False
+
+            if stale:
+                try:
+                    os.remove(lock_file)
+                except Exception:
+                    pass
+            else:
+                if not silent:
+                    self.log_print("[INFO] Firmware upload in progress... waiting for flash to complete.")
+                return False
+
         ports_to_try = []
         if self.port:
             ports_to_try.append(self.port)
@@ -1466,8 +2229,20 @@ class JacktorHybridMonitor:
                 ports_to_try.append(auto_p)
 
         if not ports_to_try:
-            self.log_print("No serial port specified or detected!")
+            if not silent:
+                self.log_print("No serial port specified or detected!")
             return False
+
+        # If connecting via SSH, verify remote panel is not actively flashing
+        if str(self.port or "").lower().startswith("ssh:"):
+            global GLOBAL_SSH_SESSION
+            if GLOBAL_SSH_SESSION:
+                try:
+                    chk = GLOBAL_SSH_SESSION.run_cmd("test -f /data/local/tmp/jacktor_flashing.lock && echo LOCKED", check=False)
+                    if "LOCKED" in (chk.stdout or ""):
+                        return False
+                except Exception:
+                    pass
 
         for p in ports_to_try:
             try:
@@ -1490,7 +2265,7 @@ class JacktorHybridMonitor:
                 self.port = p
                 self.last_rx_time = time.time()
                 self.log_print(f"CONNECTED to {self.port} @ {self.baud} baud")
-                req_timeout = 0.85 if str(self.port).lower().startswith("adb:") else 0.45
+                req_timeout = 0.85 if str(self.port).lower().startswith(("adb:", "ssh:")) else 0.45
                 self.request_commands_list(timeout=req_timeout)
                 return True
 
@@ -1498,7 +2273,7 @@ class JacktorHybridMonitor:
                 self.ser = None
 
         # Fallback: if primary local port failed, auto-detect local port candidates
-        if not str(self.port or "").lower().startswith("adb:"):
+        if not str(self.port or "").lower().startswith(("adb:", "ssh:")):
             auto_p = select_port_interactive()
             if auto_p and auto_p != self.port:
                 try:
@@ -1518,7 +2293,8 @@ class JacktorHybridMonitor:
                 except Exception:
                     self.ser = None
 
-        self.log_print(f"Connection failed to {self.port or 'specified ports'}")
+        if not silent:
+            self.log_print(f"Connection failed to {self.port or 'specified ports'}")
         return False
 
     def request_commands_list(self, timeout=0.45):
@@ -1736,14 +2512,17 @@ class JacktorHybridMonitor:
                         self.status["spk_pwr"] = bool(nvs.get("spk_pwr", True))
 
                     try:
-                        vu_raw = int(hz1.get("vu", 0) or 0)
-                        vu_l_raw = int(hz1.get("vu_l", vu_raw) or 0)
-                        vu_r_raw = int(hz1.get("vu_r", vu_raw) or 0)
-                        if vu_l_raw > 255: vu_l_raw = int(vu_l_raw * 255 / 1023)
-                        if vu_r_raw > 255: vu_r_raw = int(vu_r_raw * 255 / 1023)
-                        self.status["vu"] = max(vu_l_raw, vu_r_raw)
-                        self.status["vu_l"] = vu_l_raw
-                        self.status["vu_r"] = vu_r_raw
+                        ana_sec = hz1.get("analyzer", {}) if isinstance(hz1.get("analyzer"), dict) else {}
+                        vu_raw = int(ana_sec.get("vu", hz1.get("vu", 0)) or 0)
+                        vu_l_raw = int(ana_sec.get("vu_l", hz1.get("vu_l", vu_raw)) or 0)
+                        vu_r_raw = int(ana_sec.get("vu_r", hz1.get("vu_r", vu_raw)) or 0)
+                        # Only update from slow hz1 packet if real-time rt packets are not actively streaming
+                        if time.time() - getattr(self, "_last_rt_telemetry_time", 0.0) > 1.5:
+                            if vu_l_raw > 255: vu_l_raw = int(vu_l_raw * 255 / 1023)
+                            if vu_r_raw > 255: vu_r_raw = int(vu_r_raw * 255 / 1023)
+                            self.status["vu"] = max(vu_l_raw, vu_r_raw)
+                            self.status["vu_l"] = vu_l_raw
+                            self.status["vu_r"] = vu_r_raw
                     except (ValueError, TypeError):
                         pass
 
@@ -1756,6 +2535,7 @@ class JacktorHybridMonitor:
             elif "rt" in data:
                 rt = data["rt"]
                 if isinstance(rt, dict):
+                    self._last_rt_telemetry_time = time.time()
                     if "pwr" in rt:
                         pwr_val = rt["pwr"]
                         new_pwr = "ON" if pwr_val else "OFF"
@@ -1827,7 +2607,6 @@ class JacktorHybridMonitor:
                             self.status["vu"] = max(vu_l_raw, vu_r_raw)
                             self.status["vu_l"] = vu_l_raw
                             self.status["vu_r"] = vu_r_raw
-                            self.vu_dirty = True
                     except (ValueError, TypeError):
                         pass
 
@@ -1874,6 +2653,39 @@ class JacktorHybridMonitor:
                             self.status["bands_r"] = list(base64.b64decode(b64_r_str))
                         except Exception:
                             pass
+
+                    # If audio is detected (VU > 0 or gate open or in audio test mode or analyzer screen), log diagnostic snapshot
+                    vu_l_chk = self.status.get("vu_l", 0)
+                    vu_r_chk = self.status.get("vu_r", 0)
+                    if vu_l_chk > 0 or vu_r_chk > 0 or self.status.get("gate_l") or self.status.get("gate_r") or getattr(self, "audio_test_mode", False) or getattr(self, "analyzer_screen_mode", False):
+                        now_log = time.time()
+                        if now_log - getattr(self, "_last_telemetry_dump", 0.0) >= 0.25:
+                            self._last_telemetry_dump = now_log
+                            b_l = self.status.get("bands_l", [0]*16)[:16]
+                            b_r = self.status.get("bands_r", [0]*16)[:16]
+                            mag_l = self.status.get("mag_l", 0)
+                            mag_r = self.status.get("mag_r", 0)
+                            bk_l = self.status.get("bk_l", 0)
+                            bk_r = self.status.get("bk_r", 0)
+                            f_l = int(round(bk_l * 44100.0 / 1024.0))
+                            f_r = int(round(bk_r * 44100.0 / 1024.0))
+                            gate_l = "OPEN" if self.status.get("gate_l") else "CLOSED"
+                            gate_r = "OPEN" if self.status.get("gate_r") else "CLOSED"
+                            dc_l = self.status.get("dc_l", 0)
+                            dc_r = self.status.get("dc_r", 0)
+                            raw_l = self.status.get("raw_l", 0)
+                            raw_r = self.status.get("raw_r", 0)
+                            log_msg = (
+                                f"[ANA-DIAG] VU L={vu_l_chk:3d} R={vu_r_chk:3d} | "
+                                f"L: gate={gate_l} mag={mag_l}@{f_l}Hz(bk={bk_l},dc={dc_l},raw={raw_l}) | "
+                                f"R: gate={gate_r} mag={mag_r}@{f_r}Hz(bk={bk_r},dc={dc_r},raw={raw_r}) | "
+                                f"BandsL={b_l} | BandsR={b_r}"
+                            )
+                            try:
+                                with open("telemetry.log", "a", encoding="utf-8") as f_diag:
+                                    f_diag.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {log_msg}\n")
+                            except Exception:
+                                pass
 
                     self.vu_dirty = True
         except Exception as e:
@@ -2024,26 +2836,6 @@ class JacktorHybridMonitor:
                 step = data.get("step", 0)
                 msg = str(data.get("msg", ""))
                 status = str(data.get("status", ""))
-
-                if step == 3 and ("(0.0 V)" in msg or "0.0 V" in msg or "0.0V" in msg or "Bench mode" in msg):
-                    v_val = 0.0
-                    try:
-                        v_val = float(data.get("smps_v", 0.0) or 0.0)
-                    except Exception:
-                        pass
-                    if v_val <= 10.0:
-                        v_val = getattr(self, "last_known_on_volt", 0.0) or self.status.get("voltage", 0.0)
-                    if v_val <= 10.0:
-                        v_val = self._load_cached_smps_volt()
-                    if v_val <= 10.0:
-                        v_val = 58.0
-
-                    msg = f"Checking SMPS Main Power Relay: SMPS = {v_val:.1f} V (Protection Normal)... [ PASS ]"
-                    status = "PASS"
-                    self.status["voltage"] = v_val
-                    self.last_known_on_volt = v_val
-                    self.header_dirty = True
-                    self._save_cached_smps_volt(v_val)
 
                 self.log_print(f"LOG[SETUP] [Step {step}] {msg} ({status})")
                 if self.status.get("power") != "ON":
@@ -2334,7 +3126,7 @@ class JacktorHybridMonitor:
         if waiting <= 0:
             # ESP32 transmits 20Hz realtime telemetry every 50ms. If RX is silent > stall_timeout,
             # relay switching EMI likely stalled the USB bulk-IN URB; reopen immediately.
-            stall_timeout = 3.5 if str(self.port or "").lower().startswith("adb:") else 0.45
+            stall_timeout = 3.5 if str(self.port or "").lower().startswith(("adb:", "ssh:")) else 0.45
             if now - self.last_rx_time > stall_timeout:
                 self.last_rx_time = now
                 self._reopen_stalled_port()
@@ -2841,6 +3633,10 @@ class JacktorHybridMonitor:
 
         elif action in ["ana-page", "ana-screen", "analyzer-screen"]:
             self.analyzer_screen_mode = True
+            try:
+                self.send_analyzer("set", mode="fft")
+            except Exception:
+                pass
 
         elif action in ["test-audio", "audio-test", "ana-test"]:
             self.audio_test_mode = True
@@ -3137,14 +3933,110 @@ class JacktorHybridMonitor:
             chars.reverse()
         return "".join(chars)
 
+    def _get_bar_chunks(self, val, trail, peak, bar_w, fx_mode, chan="L", reverse=False):
+        if bar_w <= 0:
+            return []
+        has_col = curses.has_colors()
+        peak_en = getattr(self, "ana_peak_hold_en", True)
+
+        filled = max(0, min(bar_w, int(round(val / 255.0 * bar_w))))
+        trail_pos = max(filled, min(bar_w, int(round(trail / 255.0 * bar_w))))
+        pk_pos = max(0, min(bar_w - 1, int(round(peak / 255.0 * bar_w)) - 1)) if peak >= 8 else -1
+
+        items = []
+        for i in range(bar_w):
+            frac = (i + 1) / float(bar_w)
+            if peak_en and i == pk_pos:
+                ch = "◆"
+                if not has_col:
+                    at = curses.A_BOLD
+                elif frac > 0.85:
+                    at = curses.color_pair(4) | curses.A_BOLD  # Peak in Red Zone
+                elif frac > 0.60:
+                    at = curses.color_pair(3) | curses.A_BOLD  # Peak in Yellow Zone
+                else:
+                    at = curses.color_pair(5) | curses.A_BOLD  # Peak in Green Zone
+            elif i < filled:
+                if fx_mode == "FIRE":
+                    ratio = (i + 1) / float(max(1, filled))
+                    ch = "█" if ratio < 0.55 else ("▓" if ratio < 0.82 else "▒")
+                elif fx_mode == "NEON":
+                    ch = "▰"
+                elif fx_mode == "DOTS":
+                    ch = "●" if i >= filled - 2 else "•"
+                else:
+                    ch = "■"
+
+                if not has_col:
+                    at = curses.A_BOLD
+                elif frac > 0.85:
+                    at = curses.color_pair(4) | curses.A_BOLD  # Level > 85%: Red
+                elif frac > 0.60:
+                    at = curses.color_pair(3) | curses.A_BOLD  # Level 60-85%: Yellow
+                else:
+                    at = curses.color_pair(5) | curses.A_BOLD  # Level <= 60%: Green
+            elif i < trail_pos:
+                dist = i - filled
+                if fx_mode == "FIRE":
+                    ch = "░" if dist == 0 else "·"
+                elif fx_mode == "NEON":
+                    ch = "▱"
+                elif fx_mode == "DOTS":
+                    ch = "∙"
+                else:
+                    ch = "▓" if dist == 0 else ("▒" if dist == 1 else "░")
+
+                if not has_col:
+                    at = curses.A_DIM
+                elif frac > 0.85:
+                    at = curses.color_pair(4) | curses.A_DIM  # Dim Red trail
+                elif frac > 0.60:
+                    at = curses.color_pair(3) | curses.A_DIM  # Dim Yellow trail
+                else:
+                    at = curses.color_pair(5) | curses.A_DIM  # Dim Green trail
+            else:
+                ch = "░" if fx_mode in ("GRADIENT", "MIRROR") else "·"
+                if not has_col:
+                    at = curses.A_DIM
+                else:
+                    at = curses.color_pair(1) | curses.A_DIM  # Dim White background track
+
+            items.append((ch, at))
+
+        if reverse:
+            items.reverse()
+        return items
+
     def draw_analyzer_screen(self):
-        w = max(40, min(self.width, 116))
+        w = max(40, min(self.width, 136))
         inner_w = w - 4
 
         try:
             self.stdscr.erase()
             has_col = curses.has_colors()
-            b_col = curses.color_pair(2) if has_col else curses.A_NORMAL
+            b_col = (curses.color_pair(1) | curses.A_DIM) if has_col else curses.A_DIM
+            white_bold = (curses.color_pair(1) | curses.A_BOLD) if has_col else curses.A_BOLD
+            white_norm = curses.color_pair(1) if has_col else curses.A_NORMAL
+            white_dim = (curses.color_pair(1) | curses.A_DIM) if has_col else curses.A_DIM
+
+            def draw_chunks(y, chunks):
+                if y < 0 or y >= self.height:
+                    return
+                cur_x = 0
+                max_x = min(self.width - 1, w)
+                for txt, attr in chunks:
+                    if cur_x >= max_x:
+                        break
+                    avail = max_x - cur_x
+                    to_put = txt[:avail]
+                    try:
+                        if attr is not None:
+                            self.stdscr.addstr(y, cur_x, to_put, attr)
+                        else:
+                            self.stdscr.addstr(y, cur_x, to_put)
+                    except curses.error:
+                        pass
+                    cur_x += len(to_put)
 
             fx_modes = getattr(self, "ana_fx_modes", ["GRADIENT", "FIRE", "NEON", "MIRROR", "DOTS"])
             fx_mode = fx_modes[getattr(self, "ana_fx_idx", 0) % len(fx_modes)]
@@ -3154,28 +4046,48 @@ class JacktorHybridMonitor:
             trail_rate = min(0.975, decay_rate + 0.09)
             peak_en = getattr(self, "ana_peak_hold_en", True)
 
+            is_connected = bool(self.ser and getattr(self.ser, "is_open", False))
+            link_tag = " [LINK:ONLINE] " if is_connected else " [LINK:RECONNECTING...] "
+            link_attr = (curses.color_pair(5) | curses.A_BOLD) if (has_col and is_connected) else ((curses.color_pair(3) | curses.A_BOLD) if has_col else curses.A_BOLD)
+
             title = f" JACKTOR AUDIO — STEREO SPECTRUM ANALYZER [FX:{fx_mode} | DECAY:{decay_name}({decay_rate:.2f})] "
-            if len(title) > w - 2:
-                title = " JACKTOR AUDIO — DUAL STEREO SPECTRUM ANALYZER "
-            dash_len = max(0, w - 2 - len(title))
-            self.stdscr.addstr(0, 0, "┌", b_col)
-            self.stdscr.addstr(0, 1, title, (curses.color_pair(2) | curses.A_BOLD) if has_col else curses.A_BOLD)
-            self.stdscr.addstr(0, 1 + len(title), ("─" * dash_len + "┐")[:max(0, self.width - 2 - len(title))], b_col)
+            if len(title) + len(link_tag) > w - 2:
+                title = f" JACKTOR AUDIO — DUAL SPECTRUM [{fx_mode}] "
+            dash_len = max(0, w - 2 - (len(title) + len(link_tag)))
+            c_top = [("┌", b_col), (title, white_bold), (link_tag, link_attr), ("─" * dash_len, b_col), ("┐", b_col)]
+            draw_chunks(0, c_top)
 
             raw_vu_l = float(self.status.get("vu_l", self.status.get("vu", 0)) or 0)
             raw_vu_r = float(self.status.get("vu_r", self.status.get("vu", 0)) or 0)
+            if raw_vu_l < 10.0:
+                raw_vu_l = 0.0
+            if raw_vu_r < 10.0:
+                raw_vu_r = 0.0
             gain_l = self.status.get("gain_l", 1.0)
             gain_r = self.status.get("gain_r", 1.0)
             noise_l = self.status.get("noise_l", 0.0)
             noise_r = self.status.get("noise_r", 0.0)
 
-            # Smooth VU Envelope & Gravity Peak-Hold Physics
-            self.ana_decay_vu_l = max(raw_vu_l, self.ana_decay_vu_l * decay_rate)
-            if self.ana_decay_vu_l < 1.5:
+            # Smooth VU Envelope & Gravity Peak-Hold Physics (Instant Squelch on Silence)
+            gate_l_active = bool(self.status.get("gate_l", False))
+            gate_r_active = bool(self.status.get("gate_r", False))
+            if not gate_l_active and raw_vu_l == 0.0:
                 self.ana_decay_vu_l = 0.0
-            self.ana_decay_vu_r = max(raw_vu_r, self.ana_decay_vu_r * decay_rate)
-            if self.ana_decay_vu_r < 1.5:
+                self.ana_vu_peak_l = 0.0
+                self.ana_vu_peak_timer_l = 0
+            else:
+                self.ana_decay_vu_l = max(raw_vu_l, self.ana_decay_vu_l * decay_rate)
+                if self.ana_decay_vu_l < 5.0:
+                    self.ana_decay_vu_l = 0.0
+
+            if not gate_r_active and raw_vu_r == 0.0:
                 self.ana_decay_vu_r = 0.0
+                self.ana_vu_peak_r = 0.0
+                self.ana_vu_peak_timer_r = 0
+            else:
+                self.ana_decay_vu_r = max(raw_vu_r, self.ana_decay_vu_r * decay_rate)
+                if self.ana_decay_vu_r < 5.0:
+                    self.ana_decay_vu_r = 0.0
 
             if self.ana_decay_vu_l >= self.ana_vu_peak_l:
                 self.ana_vu_peak_l = self.ana_decay_vu_l
@@ -3198,28 +4110,24 @@ class JacktorHybridMonitor:
             vu_pk_l = int(round(self.ana_vu_peak_l))
             vu_pk_r = int(round(self.ana_vu_peak_r))
 
-            bar_w = max(10, inner_w - 28)
-            str_l = self._format_fx_bar(vu_l, self.ana_vu_peak_l * 0.9, vu_pk_l, bar_w, fx_mode)
-            str_r = self._format_fx_bar(vu_r, self.ana_vu_peak_r * 0.9, vu_pk_r, bar_w, fx_mode)
-
             # Stereo Balance & Channel Isolation Meter
-            bal_w = 21
+            bal_w = 21 if w >= 65 else 13
             bal_center = bal_w // 2
             if vu_l == 0 and vu_r == 0:
                 bal_pos = bal_center
-                bal_tag = "SILENCE (NOISE=0)"
+                bal_tag = "SILENCE" if w < 65 else "SILENCE (NOISE=0)"
             elif vu_l > 0 and vu_r == 0:
                 bal_pos = 0
-                bal_tag = "LEFT ONLY (ISOLATED)"
+                bal_tag = "LEFT ONLY" if w < 65 else "LEFT ONLY (ISOLATED)"
             elif vu_r > 0 and vu_l == 0:
                 bal_pos = bal_w - 1
-                bal_tag = "RIGHT ONLY (ISOLATED)"
+                bal_tag = "RIGHT ONLY" if w < 65 else "RIGHT ONLY (ISOLATED)"
             else:
                 diff_ratio = (vu_r - vu_l) / float(max(1, max(vu_l, vu_r)))
                 bal_pos = max(0, min(bal_w - 1, int(round(bal_center + diff_ratio * bal_center))))
                 db_diff = 20.0 * math.log10(max(1.0, float(vu_r)) / max(1.0, float(vu_l)))
                 if abs(db_diff) <= 0.6:
-                    bal_tag = f"BALANCED ({db_diff:+.1f}dB)"
+                    bal_tag = f"BAL ({db_diff:+.1f}dB)"
                 else:
                     bal_tag = f"BAL {db_diff:+.1f}dB"
             bal_chars = ["─"] * bal_w
@@ -3228,22 +4136,58 @@ class JacktorHybridMonitor:
             bal_bar = "".join(bal_chars)
 
             p_line = (
-                f"│ GAIN L:{gain_l:.2f} R:{gain_r:.2f} │ NOISE L:{noise_l:.2f} R:{noise_r:.2f} "
-                f"│ FX:{fx_mode} DECAY:{decay_name}({decay_rate:.2f}) PEAK:{'ON' if peak_en else 'OFF'}"
+                f" GAIN L:{gain_l:.2f} R:{gain_r:.2f} │ NOISE L:{noise_l:.2f} R:{noise_r:.2f} "
+                f"│ FX:{fx_mode} DECAY:{decay_name} PEAK:{'ON' if peak_en else 'OFF'}"
             )
-            self.stdscr.addstr(1, 0, f"{p_line:<{inner_w + 2}} │"[:self.width - 1])
-            bal_line = f"│ STEREO VU & BALANCE : L ◄{bal_bar}► R [{bal_tag}]"
-            self.stdscr.addstr(2, 0, f"{bal_line:<{inner_w + 2}} │"[:self.width - 1])
-            self.stdscr.addstr(3, 0, f"│  • LEFT  : [{str_l}] {vu_l:3d}/255 (PK:{vu_pk_l:3d})".ljust(inner_w + 2) + " │")
-            self.stdscr.addstr(4, 0, f"│  • RIGHT : [{str_r}] {vu_r:3d}/255 (PK:{vu_pk_r:3d})".ljust(inner_w + 2) + " │")
-            self.stdscr.addstr(5, 0, "│".ljust(inner_w + 3) + "│")
+            rem_p = max(0, (w - 2) - len(p_line))
+            c_r1 = [("│", b_col), (p_line, white_dim), (" " * rem_p, b_col), ("│", b_col)]
+            draw_chunks(1, c_r1)
 
+            c_r2 = [
+                ("│ ", b_col),
+                ("STEREO VU & BALANCE: " if w >= 65 else "VU & BAL: ", white_dim),
+                ("L ◄", white_bold),
+                (bal_bar, white_norm),
+                ("► R ", white_bold),
+                (f"[{bal_tag}]", white_bold),
+            ]
+            tot_r2 = sum(len(t) for t, _ in c_r2)
+            rem_r2 = max(0, (w - 1) - tot_r2 - 1)
+            c_r2 += [(" " * rem_r2, b_col), ("│", b_col)]
+            draw_chunks(2, c_r2)
+
+            is_compact = (w < 72)
+            l_hdr = " • L: [" if is_compact else " • LEFT  : ["
+            r_hdr = " • R: [" if is_compact else " • RIGHT : ["
+            suf_l = f"] {vu_l:3d}" if is_compact else f"] {vu_l:3d}/255 (PK:{vu_pk_l:3d})"
+            suf_r = f"] {vu_r:3d}" if is_compact else f"] {vu_r:3d}/255 (PK:{vu_pk_r:3d})"
+            vu_bar_w = max(6, (w - 1) - 2 - len(l_hdr) - len(suf_l) - 2)
+
+            # Row 3: Left VU (Text, labels, and brackets are clean WHITE, bar characters colored by level)
+            c_l = [("│ ", b_col), (l_hdr, white_bold)] + self._get_bar_chunks(vu_l, self.ana_vu_peak_l * 0.9, vu_pk_l, vu_bar_w, fx_mode, chan="L") + [(suf_l, white_norm)]
+            tot_l = sum(len(t) for t, _ in c_l)
+            rem_l = max(0, (w - 1) - tot_l - 1)
+            c_l += [(" " * rem_l, b_col), ("│", b_col)]
+            draw_chunks(3, c_l)
+
+            # Row 4: Right VU (Text, labels, and brackets are clean WHITE, bar characters colored by level)
+            c_r = [("│ ", b_col), (r_hdr, white_bold)] + self._get_bar_chunks(vu_r, self.ana_vu_peak_r * 0.9, vu_pk_r, vu_bar_w, fx_mode, chan="R") + [(suf_r, white_norm)]
+            tot_r = sum(len(t) for t, _ in c_r)
+            rem_r = max(0, (w - 1) - tot_r - 1)
+            c_r += [(" " * rem_r, b_col), ("│", b_col)]
+            draw_chunks(4, c_r)
+
+            # Row 5: Inner space
+            draw_chunks(5, [("│", b_col), (" " * (w - 2), b_col), ("│", b_col)])
+
+            # Row 6: Spectrum Section Header
             hdr_spec = (
-                "│ STEREO MIRROR SPECTRUM (◄── LEFT │ FREQ │ RIGHT ──►):"
+                " STEREO MIRROR SPECTRUM (◄── LEFT │ FREQ │ RIGHT ──►):"
                 if fx_mode == "MIRROR"
-                else "│ INDEPENDENT STEREO SPECTRUM (LEFT vs RIGHT — DECAY + AFTERGLOW + PEAK HOLD):"
+                else " INDEPENDENT STEREO SPECTRUM (LEFT vs RIGHT — DECAY + AFTERGLOW + PEAK HOLD):"
             )
-            self.stdscr.addstr(6, 0, f"{hdr_spec:<{inner_w + 2}} │"[:self.width - 1])
+            rem_hdr = max(0, (w - 2) - len(hdr_spec))
+            draw_chunks(6, [("│", b_col), (hdr_spec, white_bold), (" " * rem_hdr, b_col), ("│", b_col)])
 
             default_bands = [0] * 16
             bands_l = self.status.get("bands_l", self.status.get("bands", default_bands))
@@ -3259,24 +4203,39 @@ class JacktorHybridMonitor:
             if not hasattr(self, "max_peak_val_r"):
                 self.max_peak_val_r = 0
 
+            gate_l_active = bool(self.status.get("gate_l", False))
+            gate_r_active = bool(self.status.get("gate_r", False))
+            dec_rate_l = decay_rate if gate_l_active else 0.40
+            trail_rate_l = trail_rate if gate_l_active else 0.40
+            dec_rate_r = decay_rate if gate_r_active else 0.40
+            trail_rate_r = trail_rate if gate_r_active else 0.40
+
             for b_i in range(len(band_cutoffs)):
                 raw_bl = float(bands_l[b_i]) if b_i < len(bands_l) else 0.0
                 raw_br = float(bands_r[b_i]) if b_i < len(bands_r) else 0.0
 
-                # Smooth Decay & Afterglow Trail Physics per Band
-                self.ana_decay_bands_l[b_i] = max(raw_bl, self.ana_decay_bands_l[b_i] * decay_rate)
-                if self.ana_decay_bands_l[b_i] < 1.5:
+                # Smooth Decay & Afterglow Trail Physics per Band (Instant Squelch on Silence)
+                if not gate_l_active and raw_bl == 0.0:
                     self.ana_decay_bands_l[b_i] = 0.0
-                self.ana_trail_bands_l[b_i] = max(self.ana_decay_bands_l[b_i], self.ana_trail_bands_l[b_i] * trail_rate)
-                if self.ana_trail_bands_l[b_i] < 1.5:
                     self.ana_trail_bands_l[b_i] = 0.0
+                else:
+                    self.ana_decay_bands_l[b_i] = max(raw_bl, self.ana_decay_bands_l[b_i] * dec_rate_l)
+                    if self.ana_decay_bands_l[b_i] < 1.5:
+                        self.ana_decay_bands_l[b_i] = 0.0
+                    self.ana_trail_bands_l[b_i] = max(self.ana_decay_bands_l[b_i], self.ana_trail_bands_l[b_i] * trail_rate_l)
+                    if self.ana_trail_bands_l[b_i] < 1.5:
+                        self.ana_trail_bands_l[b_i] = 0.0
 
-                self.ana_decay_bands_r[b_i] = max(raw_br, self.ana_decay_bands_r[b_i] * decay_rate)
-                if self.ana_decay_bands_r[b_i] < 1.5:
+                if not gate_r_active and raw_br == 0.0:
                     self.ana_decay_bands_r[b_i] = 0.0
-                self.ana_trail_bands_r[b_i] = max(self.ana_decay_bands_r[b_i], self.ana_trail_bands_r[b_i] * trail_rate)
-                if self.ana_trail_bands_r[b_i] < 1.5:
                     self.ana_trail_bands_r[b_i] = 0.0
+                else:
+                    self.ana_decay_bands_r[b_i] = max(raw_br, self.ana_decay_bands_r[b_i] * dec_rate_r)
+                    if self.ana_decay_bands_r[b_i] < 1.5:
+                        self.ana_decay_bands_r[b_i] = 0.0
+                    self.ana_trail_bands_r[b_i] = max(self.ana_decay_bands_r[b_i], self.ana_trail_bands_r[b_i] * trail_rate_r)
+                    if self.ana_trail_bands_r[b_i] < 1.5:
+                        self.ana_trail_bands_r[b_i] = 0.0
 
                 # Gravity Peak-Hold Physics
                 if self.ana_decay_bands_l[b_i] >= self.ana_peak_hold_l[b_i]:
@@ -3320,77 +4279,85 @@ class JacktorHybridMonitor:
                     freq_r = band_cutoffs[peak_idx_r] if peak_idx_r < len(band_cutoffs) else 0
                     self.status["last_peak_freq_r"] = f"{freq_r} Hz (Band B{peak_idx_r+1:02d})"
 
-            half_bar_w = max(4, (inner_w - 48) // 2)
             max_r = min(len(band_cutoffs), self.height - 11)
 
             for idx in range(max_r):
                 bl_val = int(round(self.ana_decay_bands_l[idx]))
                 br_val = int(round(self.ana_decay_bands_r[idx]))
+                if bl_val < 8:
+                    bl_val = 0
+                if br_val < 8:
+                    br_val = 0
                 pk_l = self.band_peaks_l[idx] if idx < len(self.band_peaks_l) else 0
                 pk_r = self.band_peaks_r[idx] if idx < len(self.band_peaks_r) else 0
                 f_lbl = f"{band_cutoffs[idx]}Hz" if idx < len(band_cutoffs) else ""
+                r_pos = 7 + idx
 
                 if fx_mode == "MIRROR":
-                    bl_bar = self._format_fx_bar(
-                        bl_val, self.ana_trail_bands_l[idx], self.ana_peak_hold_l[idx], half_bar_w, fx_mode, reverse=True
-                    )
-                    br_bar = self._format_fx_bar(
-                        br_val, self.ana_trail_bands_r[idx], self.ana_peak_hold_r[idx], half_bar_w, fx_mode, reverse=False
-                    )
-                    b_line = (
-                        f"  B{idx+1:02d} L({bl_val:3d}/{pk_l:3d}) [{bl_bar}] │{f_lbl:^7s}│ [{br_bar}] ({br_val:3d}/{pk_r:3d})R"
-                    )
-                else:
-                    bl_bar = self._format_fx_bar(
-                        bl_val, self.ana_trail_bands_l[idx], self.ana_peak_hold_l[idx], half_bar_w, fx_mode, reverse=False
-                    )
-                    br_bar = self._format_fx_bar(
-                        br_val, self.ana_trail_bands_r[idx], self.ana_peak_hold_r[idx], half_bar_w, fx_mode, reverse=False
-                    )
-                    b_line = (
-                        f"  • B{idx+1:02d} ({f_lbl:<6s}) L:[{bl_bar}] {bl_val:3d} (MAX:{pk_l:3d}) | R:[{br_bar}] {br_val:3d} (MAX:{pk_r:3d})"
-                    )
+                    b_lbl = f" B{idx+1:02d} "
+                    l_pre = f"L:{bl_val:3d} ["
+                    c_sep = f" │{f_lbl:^7s}│ "
+                    r_suf = f"] {br_val:3d}:R"
+                    fix_w = 2 + len(b_lbl) + len(l_pre) + 1 + len(c_sep) + 1 + len(r_suf) + 2
+                    half_bar_w = max(3, ((w - 1) - fix_w) // 2)
 
-                dom_val = max(bl_val, br_val)
-                row_attr = curses.A_NORMAL
-                if has_col:
-                    if dom_val >= 220:
-                        row_attr = curses.color_pair(4) | curses.A_BOLD
-                    elif dom_val >= 145:
-                        row_attr = curses.color_pair(3) | curses.A_BOLD
-                    elif dom_val > 0:
-                        row_attr = curses.color_pair(5)
-                self.stdscr.addstr(7 + idx, 0, f"│ {b_line:<{inner_w}} │"[:self.width - 1], row_attr)
+                    l_chunks = self._get_bar_chunks(bl_val, self.ana_trail_bands_l[idx], self.ana_peak_hold_l[idx], half_bar_w, fx_mode, chan="L", reverse=True)
+                    r_chunks = self._get_bar_chunks(br_val, self.ana_trail_bands_r[idx], self.ana_peak_hold_r[idx], half_bar_w, fx_mode, chan="R", reverse=False)
+
+                    c_spec = [("│ ", b_col), (b_lbl, white_norm), (l_pre, white_bold)] + l_chunks + [("]", white_bold), (c_sep, b_col), ("[", white_bold)] + r_chunks + [(r_suf, white_bold)]
+                    tot_s = sum(len(t) for t, _ in c_spec)
+                    rem_s = max(0, (w - 1) - tot_s - 1)
+                    c_spec += [(" " * rem_s, b_col), ("│", b_col)]
+                    draw_chunks(r_pos, c_spec)
+                else:
+                    band_hdr = f" B{idx+1:02d} " if is_compact else f" • B{idx+1:02d} ({f_lbl:<5s}) "
+                    l_lbl = "L:["
+                    sep_str = " │ R:[" if is_compact else f"] {bl_val:3d} │ R:["
+                    r_close = f"] {br_val:3d}" if is_compact else f"] {br_val:3d}"
+                    fix_w = 2 + len(band_hdr) + len(l_lbl) + 1 + len(sep_str) + 1 + len(r_close) + 2
+                    half_bar_w = max(3, ((w - 1) - fix_w) // 2)
+
+                    l_chunks = self._get_bar_chunks(bl_val, self.ana_trail_bands_l[idx], self.ana_peak_hold_l[idx], half_bar_w, fx_mode, chan="L", reverse=False)
+                    r_chunks = self._get_bar_chunks(br_val, self.ana_trail_bands_r[idx], self.ana_peak_hold_r[idx], half_bar_w, fx_mode, chan="R", reverse=False)
+
+                    if is_compact:
+                        c_spec = [("│ ", b_col), (band_hdr, white_norm), (l_lbl, white_bold)] + l_chunks + [("]", white_bold), (" │ ", b_col), ("R:[", white_bold)] + r_chunks + [(r_close, white_norm)]
+                    else:
+                        c_spec = [("│ ", b_col), (band_hdr, white_norm), (l_lbl, white_bold)] + l_chunks + [(f"] {bl_val:3d}", white_norm), (" │ ", b_col), ("R:[", white_bold)] + r_chunks + [(r_close, white_norm)]
+
+                    tot_s = sum(len(t) for t, _ in c_spec)
+                    rem_s = max(0, (w - 1) - tot_s - 1)
+                    c_spec += [(" " * rem_s, b_col), ("│", b_col)]
+                    draw_chunks(r_pos, c_spec)
 
             cur_row = 7 + max_r
             peak_l = self.status.get("last_peak_freq_l", "N/A")
             peak_r = self.status.get("last_peak_freq_r", "N/A")
 
             if cur_row < self.height - 5:
-                self.stdscr.addstr(cur_row, 0, f"│".ljust(inner_w + 3) + "│")
+                draw_chunks(cur_row, [("│", b_col), (" " * (w - 2), b_col), ("│", b_col)])
                 cur_row += 1
-                self.stdscr.addstr(cur_row, 0, f"│ LAST PEAK FREQUENCY:".ljust(inner_w + 2) + " │")
+                rem_h = max(0, (w - 2) - len(" LAST PEAK FREQUENCY:"))
+                draw_chunks(cur_row, [("│", b_col), (" LAST PEAK FREQUENCY:", white_bold), (" " * rem_h, b_col), ("│", b_col)])
                 cur_row += 1
-                self.stdscr.addstr(cur_row, 0, f"│  • LEFT  : {peak_l}".ljust(inner_w + 2) + " │")
+                rem_pk_l = max(0, (w - 2) - len(f"  • LEFT  : {peak_l}"))
+                draw_chunks(cur_row, [("│", b_col), (f"  • LEFT  : {peak_l}", white_norm), (" " * rem_pk_l, b_col), ("│", b_col)])
                 cur_row += 1
-                self.stdscr.addstr(cur_row, 0, f"│  • RIGHT : {peak_r}".ljust(inner_w + 2) + " │")
+                rem_pk_r = max(0, (w - 2) - len(f"  • RIGHT : {peak_r}"))
+                draw_chunks(cur_row, [("│", b_col), (f"  • RIGHT : {peak_r}", white_norm), (" " * rem_pk_r, b_col), ("│", b_col)])
                 cur_row += 1
 
             row = min(cur_row, self.height - 3)
             b_border = "└" + "─" * (w - 2) + "┘"
-            self.stdscr.addstr(row, 0, b_border[:self.width - 1], b_col)
+            draw_chunks(row, [(b_border, b_col)])
 
             if row + 1 < self.height:
-                self.stdscr.move(row + 1, 0)
-                self.stdscr.clrtoeol()
-                self.stdscr.addstr(row + 1, 0, "Cmd: > ", (curses.color_pair(5) | curses.A_BOLD) if has_col else curses.A_BOLD)
-                self.stdscr.addstr(row + 1, 7, self.ana_input_buf[:self.width - 8])
+                cmd_attr = (curses.color_pair(5) | curses.A_BOLD) if has_col else curses.A_BOLD
+                draw_chunks(row + 1, [("Cmd: > ", cmd_attr), (self.ana_input_buf, white_bold)])
 
-            footer = " [ Hotkeys: (F)X Style | (D)ecay | (P)eak Hold | (R)eset MAX | Cmds: fx/decay/l-gain/r-gain | q: exit ] "
+            footer = " [ Hotkeys: (F)X Style | (D)ecay | (P)eak Hold | (R)eset MAX | Cmds: fx/decay/l-gain/r-gain/spk-off | q: exit ] "
             if row + 2 < self.height:
-                self.stdscr.move(row + 2, 0)
-                self.stdscr.clrtoeol()
-                self.stdscr.addstr(row + 2, 0, footer[:self.width - 1], (curses.color_pair(2) | curses.A_REVERSE) if has_col else curses.A_REVERSE)
+                draw_chunks(row + 2, [(footer[:w], (curses.color_pair(1) | curses.A_REVERSE) if has_col else curses.A_REVERSE)])
 
             self.stdscr.refresh()
             sys.stdout.flush()
@@ -3724,7 +4691,7 @@ class JacktorHybridMonitor:
                 f"  • ESP32 5V Rail    : {s['v_esp']:.1f}V (ADS1115 ADC Ch3)",
                 f"  • RTC DS3231 Temp  : {s['rtc_temp']:.1f}°C (I2C 0x68 / SQW 1Hz)",
                 f"  • Audio ADC Left   : {s.get('adc_v_l', 0.0):.3f}V (Raw {s.get('adc_raw_l', 0.0):.0f} / GPIO 39)",
-                f"  • Audio ADC Right  : {s.get('adc_v_r', 0.0):.3f}V (Raw {s.get('adc_raw_r', 0.0):.0f} / GPIO 36)",
+                f"  • Audio ADC Right  : {s.get('adc_v_r', 0.0):.3f}V (Raw {s.get('adc_raw_r', 0.0):.0f} / GPIO 35)",
                 f"  • Fault Status     : {err_str} (GPIO 34 / 39 Opto)",
                 f"  • QCC5125 Power    : {s.get('qcc_pwr', 'Inactive')} (GPIO 5 Power Detect)",
                 f"  • BT Audio Status  : {s.get('bt_status_pin', 'Inactive')} (GPIO 23 Connection LED)",
@@ -3764,25 +4731,26 @@ class JacktorHybridMonitor:
             pass
 
     def run(self):
-        if not self.connect():
-            self.tui_init()
-            self.stdscr.nodelay(False)
-            self.log_print("Failed to connect. Press any key to exit...", with_ts=False)
-            self.refresh_all()
-            self.stdscr.getch()
-            return
-
         self.tui_init()
         self.running = True
+
+        if not self.connect(silent=False):
+            self.log_print(f"[RECONNECT] Menghubungkan ke {self.port or 'device'}... (Akan mencoba terus tanpa keluar)")
+            self.refresh_all()
 
         while self.running:
             try:
                 if not self.ser or not getattr(self.ser, 'is_open', False):
                     now_reconnect = time.time()
-                    if now_reconnect - getattr(self, "last_reconnect_attempt", 0) >= 0.5:
+                    if now_reconnect - getattr(self, "last_reconnect_attempt", 0) >= 0.8:
                         self.last_reconnect_attempt = now_reconnect
-                        if self.connect():
+                        if self.connect(silent=True):
                             self.log_print("Re-established serial connection successfully.")
+                            if getattr(self, "analyzer_screen_mode", False):
+                                try:
+                                    self.send_analyzer("set", mode="fft")
+                                except Exception:
+                                    pass
 
                 if self.recalc_layout():
                     if not self.deviceinfo_mode:
@@ -3943,11 +4911,6 @@ class JacktorHybridMonitor:
                     continue
 
                 if self.analyzer_screen_mode:
-                    now_time = time.time()
-                    if now_time - getattr(self, "last_ana_request", 0) >= 1.0:
-                        self.last_ana_request = now_time
-                        self.send_command({"ana_mode": "fft"}, quiet=True)
-
                     while ch != -1 and self.analyzer_screen_mode:
                         if ch in (3, 27): # Ctrl+C, ESC
                             self.analyzer_screen_mode = False
@@ -4019,14 +4982,14 @@ class JacktorHybridMonitor:
                             self.draw_frame()
                             self.refresh_all()
                             break
-                        elif not self.ana_input_buf and ch == ord('F'):
+                        elif not self.ana_input_buf and ch in (ord('f'), ord('F')):
                             self.ana_fx_idx = (self.ana_fx_idx + 1) % len(self.ana_fx_modes)
-                        elif not self.ana_input_buf and ch == ord('D'):
+                        elif not self.ana_input_buf and ch in (ord('d'), ord('D')):
                             self.ana_decay_idx = (self.ana_decay_idx + 1) % len(self.ana_decay_presets)
                             self.ana_decay_rate = self.ana_decay_presets[self.ana_decay_idx][1]
-                        elif not self.ana_input_buf and ch == ord('P'):
+                        elif not self.ana_input_buf and ch in (ord('p'), ord('P')):
                             self.ana_peak_hold_en = not self.ana_peak_hold_en
-                        elif not self.ana_input_buf and ch == ord('R'):
+                        elif not self.ana_input_buf and ch in (ord('r'), ord('R')):
                             self.band_peaks_l = [0] * 64
                             self.band_peaks_r = [0] * 64
                             self.ana_peak_hold_l = [0.0] * 64
@@ -4035,6 +4998,11 @@ class JacktorHybridMonitor:
                             self.max_peak_val_r = 0
                             self.status["last_peak_freq_l"] = "N/A"
                             self.status["last_peak_freq_r"] = "N/A"
+                        elif not self.ana_input_buf and ch in (ord('c'), ord('C')):
+                            self.parse_line("calibrate")
+                        elif not self.ana_input_buf and ch in (ord('m'), ord('M')):
+                            cur_audio = self.status.get("audio_relay", True)
+                            self.parse_line("audio-off" if cur_audio else "audio-on")
                         elif 32 <= ch <= 126:
                             self.ana_input_buf += chr(ch)
                         ch = self.stdscr.getch()
@@ -4245,21 +5213,33 @@ def select_port_interactive():
 
 def select_target_interactive():
     target_choice = None
+    cli_host = None
     if len(sys.argv) > 1:
         arg = sys.argv[1].strip()
         arg_lower = arg.lower()
+        if arg_lower in ("-h", "--help"):
+            print("Usage: python3 cmd.py [1|usb | 2|panel [HOST_IP] | api:HOST | tcp:HOST:PORT | /dev/ttyUSB0]")
+            print("Options:")
+            print("  1, usb                  Direct local USB serial connection")
+            print("  2, panel [HOST_IP]      Android Panel via High-Speed Jacktor API (HTTP Port 80)")
+            print("  api:HOST                Direct Jacktor API connection to panel host")
+            print("  tcp:HOST:PORT           Direct TCP connection to specific host:port")
+            print("  /dev/ttyUSB* / COM*     Direct serial port device path")
+            sys.exit(0)
         if arg_lower in ("1", "usb", "direct", "local"):
             target_choice = "1"
-        elif arg_lower in ("2", "adb", "android", "panel"):
+        elif arg_lower in ("2", "panel", "ssh", "android", "remote", "wifi", "adb", "socat", "tcp", "api"):
             target_choice = "2"
-        elif arg_lower.startswith("adb:") or arg.startswith("/dev/") or arg_lower.startswith("com"):
+            if len(sys.argv) > 2:
+                cli_host = sys.argv[2].strip()
+        elif arg_lower.startswith(("api:", "tcp:", "ssh:", "adb:", "/dev/", "com")):
             return arg
 
     if not target_choice:
         print("=== JACKTOR AUDIO TUI MONITOR ===")
         print("Target Monitor: Jacktor Audio Amplifier (ESP32 @ 921,600 bps)")
-        print("1. USB Langsung di Device Ini (Direct USB) [DEFAULT]")
-        print("2. Lewat ADB (Panel Android)")
+        print("1. USB (Direct USB serial) [DEFAULT]")
+        print("2. Panel (Android Panel via High-Speed Jacktor API / HTTP Port 80)")
         try:
             user_input = input("Pilih target koneksi [1/2] (Default: 1): ").strip()
         except (KeyboardInterrupt, EOFError):
@@ -4268,10 +5248,10 @@ def select_target_interactive():
 
         if not user_input or user_input == "1" or user_input.lower().startswith(("u", "d", "l")):
             target_choice = "1"
-        elif user_input == "2" or user_input.lower().startswith(("a", "p")):
+        elif user_input == "2" or user_input.lower().startswith(("p", "s", "a", "r", "t")):
             target_choice = "2"
         else:
-            print("[WARN] Pilihan tidak valid, menggunakan USB di Device Ini (1).")
+            print("[WARN] Pilihan tidak valid, menggunakan USB (1).")
             target_choice = "1"
 
     if target_choice == "1":
@@ -4279,53 +5259,23 @@ def select_target_interactive():
         port = select_port_interactive()
         if not port or (not os.path.exists(port) and platform.system() == "Linux"):
             print(f"[ERROR] Port USB serial ({port or '/dev/ttyUSB0'}) tidak terdeteksi pada device ini!")
-            print("Pastikan ESP32 Amplifier terhubung ke USB pada device ini, atau pilih opsi 2 (Lewat ADB).")
+            print("Pastikan ESP32 Amplifier terhubung ke USB pada device ini, atau pilih opsi 2 (Panel).")
             sys.exit(1)
         print(f"[OK] Terhubung melalui USB lokal: {port}")
         return port
 
-    print("[INFO] Memeriksa koneksi ADB dan ketersediaan USB serial TTY pada Panel Android...")
-    adb_devices = get_connected_adb_devices()
-    if not adb_devices:
-        print("[ERROR] Perangkat Android tidak terdeteksi via ADB!")
-        print("Pastikan Panel Android menyala, terhubung via USB/Wi-Fi ADB, dan statusnya authorized.")
+    print("[INFO] Mendeteksi IP Panel Android Jacktor Audio di jaringan...")
+    panel_ip = cli_host or discover_jacktor_panel(interactive=True)
+    if not panel_ip:
+        print("[ERROR] Panel Android Jacktor Audio tidak ditemukan di jaringan!")
         sys.exit(1)
 
-    selected_device = adb_devices[0]
-    if len(sys.argv) > 2 and sys.argv[2].strip() in adb_devices:
-        selected_device = sys.argv[2].strip()
-    elif len(adb_devices) > 1:
-        print("Perangkat ADB yang terdeteksi:")
-        for idx, dev in enumerate(adb_devices, 1):
-            print(f"  {idx}. {dev}")
-        try:
-            dev_in = input(f"Pilih perangkat ADB [1-{len(adb_devices)}] (Default: 1): ").strip()
-            if dev_in.isdigit() and 1 <= int(dev_in) <= len(adb_devices):
-                selected_device = adb_devices[int(dev_in) - 1]
-        except (KeyboardInterrupt, EOFError):
-            sys.exit(0)
-
-    android_ports = get_android_serial_ports(selected_device)
-    if not android_ports:
-        print(f"[ERROR] Port USB Serial TTY (/dev/ttyUSB*) tidak terdeteksi pada Panel Android ({selected_device})!")
-        print("Pastikan kabel USB OTG terhubung dari ESP32 Amplifier ke Panel Android dan driver usb-serial.kpm aktif.")
-        sys.exit(1)
-
-    target_tty = android_ports[0]
-    if len(android_ports) > 1:
-        print("Port USB Serial yang terdeteksi di Panel Android:")
-        for idx, p_name in enumerate(android_ports, 1):
-            print(f"  {idx}. {p_name}")
-        try:
-            p_in = input(f"Pilih port TTY [1-{len(android_ports)}] (Default: 1): ").strip()
-            if p_in.isdigit() and 1 <= int(p_in) <= len(android_ports):
-                target_tty = android_ports[int(p_in) - 1]
-        except (KeyboardInterrupt, EOFError):
-            sys.exit(0)
-
-    adb_spec = f"adb:{selected_device}:{target_tty}"
-    print(f"[OK] Terverifikasi Panel Android via ADB ({selected_device}) | Port TTY: {target_tty}")
-    return adb_spec
+    from auth_client import JacktorApiClient
+    print(f"[INFO] Menghubungkan ke Jacktor API pada Panel Android ({panel_ip}:80)...")
+    client = JacktorApiClient.authenticate(host=panel_ip, interactive=True)
+    api_spec = f"api:{panel_ip}"
+    print(f"[OK] Terhubung melalui Jacktor API (Panel: {panel_ip} -> HTTP Port 80)")
+    return api_spec
 
 
 def get_lang():

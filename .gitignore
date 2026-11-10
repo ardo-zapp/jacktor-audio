@@ -11,6 +11,13 @@ compile_commands.json
 __pycache__/
 *.pyc
 *.last_smps_volt
+.jacktor_panel_ip
 tools/log*.txt
 *.o
-ANTIGRAVITY.md
+!tools/aarch64-linux-musl-cross/**
+panel/app/.gradle/
+panel/app/**/build/
+panel/app/local.properties
+panel/realme-bengal/image/*.img
+!*.img.xz
+

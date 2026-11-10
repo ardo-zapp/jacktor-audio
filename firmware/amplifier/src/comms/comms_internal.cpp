@@ -157,54 +157,6 @@ void sendAckErr(const char *key, const char *reason) {
   sendTelemetry(root);
 }
 
-void sendOtaEvent(const char *evt) {
-  cJSON *root = cJSON_CreateObject();
-  cJSON_AddStringToObject(root, "type", "ota");
-  cJSON_AddStringToObject(root, "evt", evt ? evt : "");
-  sendTelemetry(root);
-}
-
-void sendOtaEventFieldStr(const char *evt, const char *field, const char *value) {
-  cJSON *root = cJSON_CreateObject();
-  cJSON_AddStringToObject(root, "type", "ota");
-  cJSON_AddStringToObject(root, "evt", evt ? evt : "");
-  if (field) cJSON_AddStringToObject(root, field, value ? value : "");
-  sendTelemetry(root);
-}
-
-void sendOtaEventFieldBool(const char *evt, const char *field, bool value) {
-  cJSON *root = cJSON_CreateObject();
-  cJSON_AddStringToObject(root, "type", "ota");
-  cJSON_AddStringToObject(root, "evt", evt ? evt : "");
-  if (field) cJSON_AddBoolToObject(root, field, value);
-  sendTelemetry(root);
-}
-
-void sendOtaWriteOk(uint32_t seq) {
-  cJSON *root = cJSON_CreateObject();
-  cJSON_AddStringToObject(root, "type", "ota");
-  cJSON_AddStringToObject(root, "evt", "write_ok");
-  cJSON_AddNumberToObject(root, "seq", seq);
-  sendTelemetry(root);
-}
-
-void sendOtaWriteErr(uint32_t seq, const char *err) {
-  cJSON *root = cJSON_CreateObject();
-  cJSON_AddStringToObject(root, "type", "ota");
-  cJSON_AddStringToObject(root, "evt", "write_err");
-  cJSON_AddNumberToObject(root, "seq", seq);
-  cJSON_AddStringToObject(root, "err", err ? err : "error");
-  sendTelemetry(root);
-}
-
-void sendOtaError(const char *err) {
-  cJSON *root = cJSON_CreateObject();
-  cJSON_AddStringToObject(root, "type", "ota");
-  cJSON_AddStringToObject(root, "evt", "error");
-  cJSON_AddStringToObject(root, "err", err ? err : "unknown");
-  sendTelemetry(root);
-}
-
 void sendLogInfoOffset(int32_t offset) {
   cJSON *root = cJSON_CreateObject();
   cJSON_AddStringToObject(root, "ver", "1");

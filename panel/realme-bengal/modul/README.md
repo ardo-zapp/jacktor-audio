@@ -1,12 +1,20 @@
-# Jacktor Audio - Systemless Module Suite
+# Jacktor Audio Framework - Systemless Module Suite
 
-This directory contains the root module for integrating the **Jacktor Audio Framework** into Android devices via standard root managers: **Magisk**, **KernelSU**, and **APatch**.
+This directory contains the root module suite for integrating the **Jacktor Audio Framework** into Android devices via standard root managers: **APatch**, **KernelSU**, and **Magisk**.
 
 ---
 
-## 1. Standard Module Architecture (`jacktor-audio-framework`)
+## 1. System Requirements & Hardware Scope
 
-The module follows the official Android root module specification. All installation metadata, installer lifecycle hooks, and runtime payloads are organized under a single standard structure:
+> [!IMPORTANT]
+> **Exclusive Device Target**:
+> This module suite is specifically tailored for the **Realme C15 Qualcomm Edition (`bengal` / `RMX2195`)** running **Android 14 GSI** on top of the mandatory **Realme UI 2.0 (Version C.06)** base firmware.
+
+---
+
+## 2. Standard Module Architecture (`jacktor-audio-framework`)
+
+The module adheres to the official Android systemless root specification:
 
 ```
 panel/realme-bengal/modul/
@@ -23,93 +31,69 @@ panel/realme-bengal/modul/
     ├── post-fs-data.sh          # Early boot filesystem & node preparation
     ├── system.prop              # System property overrides (audio, display, tweaks)
     ├── auto_mount               # Magisk systemless overlay marker
-    ├── config/                  # CENTRALIZED configuration & persistent state directory
+    ├── config/                  # Centralized configuration & persistent state directory
     ├── system/                  # Systemless overlay: BusyBox NDK, audio configs, binaries
-    └── webroot/                 # Responsive HTML5/CSS3/JS WebUI Dashboard (Port 80)
+    └── webroot/                 # Responsive HTML5/CSS3/JS WebUI Dashboard & REST/SSE API (Port 80)
 ```
-
-### Clean Runtime Module
-When the zip archive is flashed via Magisk, KernelSU, or APatch:
-1. The manager extracts the zip payload to `$MODPATH` (`/data/adb/modules/jacktor-audio-framework/`).
-2. The installer runs `customize.sh`.
-3. At the conclusion of setup, `customize.sh` purges temporary installer files (`META-INF/`, `customize.sh`, `kpm/`) from `$MODPATH`.
-4. As a result, the live running module on the Android device remains clean and uncluttered.
 
 ---
 
-## 2. Centralized Configuration Directory (`config/`)
+## 3. Centralized Configuration Directory (`config/`)
 
-To prevent configuration fragmentation across the filesystem, all settings, credentials, and state caches are strictly consolidated under `config/`:
+All parameters, credentials, and persistent states are strictly consolidated under `config/`:
 
 | File | Purpose & Function |
 | :--- | :--- |
-| **`config/audio_gain.conf`** | Audio gain calibration values (Digital, Analog, Ear PA). |
-| **`config/auth.conf`** | Credentials for WebUI and SSH dashboard login. |
+| **`config/auth.conf`** | Credentials for WebUI and SSH dashboard login (SHA-256 hashed). |
 | **`config/session_token`** | Active session token for authenticated WebUI requests. |
 | **`config/cpu_profile`** | Active CPU governor profile (`performance` / `balanced`). |
-| **`config/resampler_mode`** | Audio resampler mode (`highest` / `match_source`). |
+| **`config/resampler_mode`** | Global / fallback audio resampler mode (`highest` / `match_source`). |
+| **`config/resampler_mode_<dev>`** | Per-device resampler mode for `internal_speaker`, `internal_headset`, `usb_dac`. |
+| **`config/fixed_quality_<dev>`** | Per-device fixed sample rate and bit-depth (e.g. `48000_16`, `96000_24`, `192000_24`). |
+| **`config/serial_bridge.conf`** | Configuration for serial-bridge daemon (`TCP_PORT=7777`, `BAUD=921600`). |
 | **`config/swap_size_mb`** | Swapfile size in megabytes for memory virtualization. |
 | **`config/usb_mode_state`** | USB OTG power/data mode state (`auto` / `host` / `device`). |
 | **`config/httpd.conf`** | BusyBox HTTP server configuration file for Port 80 WebUI. |
-| **`config/tweaks.cache`** | Cached telemetry values used by background WebUI status queries. |
-| **`config/current_track`** | Real-time metadata of currently playing track. |
+| **`config/current_track`** | Real-time metadata of currently playing track (displays `"-"` in standby). |
 | **`config/current_cover_ts`** | Album art cache timestamp. |
 | **`config/audio-deviceidle.xml`** | Android deviceidle (Doze mode) whitelist to prevent audio dropouts. |
-| **`config/run_once_doze`** | One-time flag verifying Doze whitelist registration. |
-| **`config/jitter-reducer-functions.shlib`** | Shell library for real-time task affinity and I/O scheduler tuning. |
 
 ---
 
-## 3. Dynamic Applet Installation (`customize.sh`)
+## 4. Core Runtime Services (`service.sh`)
 
-When the module is installed:
-1. **BusyBox Setup**: Inspects the stock ROM's binary list in `/system/bin`.
-2. **Conflict Avoidance**: Dynamically generates symlinks **only for applets not already present in the stock ROM**, preventing binary collisions or bootloops.
-3. **Configuration Defaults**: Populates missing configuration files in `$MODPATH/config/` with factory defaults.
-4. **Kernel Driver Deployment**: If APatch is detected (`/data/adb/ap/`), automatically installs the bundled `kpm/usb-serial.kpm` driver into `/data/adb/ap/kpm/usb-serial/usb-serial.kpm` (`chmod 644`).
-5. **Payload Cleanup**: Removes `META-INF`, `customize.sh`, and `kpm` from `$MODPATH` so the running module directory remains minimal.
-
----
-
-## 4. Building & Packaging the Flashable ZIP
-
-The module is built automatically by the project's unified build automation tool:
-
-```bash
-# Build complete project (KPM driver, firmware, and flashable module ZIP):
-python3 tools/build.py
-
-# Or package only the module ZIP:
-python3 tools/build.py --module-only
-```
-
-The build script automatically:
-1. Compiles `usb-serial.kpm` using the AArch64 Musl toolchain.
-2. Copies `usb-serial.kpm` into `jacktor-audio-framework/kpm/usb-serial.kpm`.
-3. Packages the module into `build/jacktor-framework.zip` and `build/jacktor-audio-framework.zip` with correct POSIX executable permissions (`0755` for scripts and binaries, `0644` for data files, and preserved symlinks).
+The module's background daemon executes upon Android boot completion and manages critical real-time subsystems:
+1. **Direct ALSA Bit-Perfect Audio Pipeline**: Bypasses Android's software mixing framework (**AudioFlinger**) and routes audio directly to ALSA hardware PCM nodes (`/dev/snd/pcmC*D*p`) up to **384 kHz / 32-bit**.
+2. **WebUI & Jacktor API Engine (Port 80)**: Launches BusyBox `httpd` serving the responsive WebUI (`webroot/`) and high-speed CGI REST/SSE endpoints (`/cgi-bin/jacktor-api`).
+3. **USB OTG Host State & Node Permissions**: Sets `/dev/ttyUSB0..7` permissions to `0666` and enforces host mode to bind the CP2102 serial bridge automatically.
+4. **Serial Telemetry Bridge (`socat` ARM64 Port 7777)**: Launches the background `serial-bridge` daemon multiplexing `/dev/ttyUSB0` at **921,600 bps** across TCP Port 7777 and PTY `/dev/ttyESP`.
 
 ---
 
-## 5. Module Deployment & Flashing
+## 5. Direct ALSA Bypass & Prohibition of Third-Party Audio Mods
 
-### Via Magisk App / APatch App
-1. Transfer `build/jacktor-framework.zip` to device storage.
-2. Open **Magisk** or **APatch** application -> **Modules** tab -> **Install from storage**.
-3. Select `jacktor-framework.zip` and reboot after installation.
+> [!WARNING]
+> **Do NOT Install Third-Party Audio Mods (Dolby Atmos, ViPER4Android, JamesDSP)**
+>
+> The Jacktor Audio Framework bypasses Android's **AudioFlinger** (`audioserver`) entirely, routing playback straight to the kernel ALSA audio drivers for bit-perfect fidelity.
+>
+> Third-party audio mods depend on injecting effect libraries into AudioFlinger. Because AudioFlinger is bypassed, these mods **will not function (no-op)**.
+>
+> Attempting to force audio through AudioFlinger to enable these mods destroys the bit-perfect pipeline, causing forced software downsampling (to 48 kHz / 16-bit), severe audio distortion, and buffer latency that ruins the real-time visual synchrony of the ESP32 FFT analyzer.
 
-### Via ADB Terminal
+---
+
+## 6. Live Synchronization Without Reflashing (`tools/sync_module.py`)
+
+During development, differential synchronization can be performed over SSH without creating ZIP packages or rebooting:
+
 ```bash
-adb push build/jacktor-framework.zip /data/local/tmp/
-adb shell su -c 'magisk --install-module /data/local/tmp/jacktor-framework.zip'
+# Push modified files & restart WebUI if needed:
+python3 tools/sync_module.py
 
-# Or on APatch:
-adb shell su -c '/data/adb/ap/bin/apd --install /data/local/tmp/jacktor-framework.zip'
+# Force full re-sync:
+python3 tools/sync_module.py --force
 
-adb reboot
-```
-
-### Live Synchronization Without Rebooting (`tools/sync_busybox.py`)
-To push updated scripts, WebUI assets, or configurations directly to the live module without flashing the ZIP or rebooting:
-```bash
-python3 tools/sync_busybox.py
+# Sync BusyBox NDK & re-generate symlinks:
+python3 tools/sync_module.py --busybox
 ```

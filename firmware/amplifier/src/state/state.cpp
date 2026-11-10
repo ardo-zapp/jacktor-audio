@@ -99,6 +99,23 @@ static void nvs_put_ulong(const char* key, uint32_t val) {
     nvs_close(handle);
 }
 
+static uint64_t nvs_get_u64_val(const char* key, uint64_t defaultVal) {
+    nvs_handle_t handle = get_nvs_handle(NVS_READONLY);
+    if (!handle) return defaultVal;
+    uint64_t val = defaultVal;
+    nvs_get_u64(handle, key, &val);
+    nvs_close(handle);
+    return val;
+}
+
+static void nvs_put_u64_val(const char* key, uint64_t val) {
+    nvs_handle_t handle = get_nvs_handle(NVS_READWRITE);
+    if (!handle) return;
+    nvs_set_u64(handle, key, val);
+    nvs_commit(handle);
+    nvs_close(handle);
+}
+
 static float nvs_get_float(const char* key, float defaultVal) {
     nvs_handle_t handle = get_nvs_handle(NVS_READONLY);
     if (!handle) return defaultVal;
@@ -171,6 +188,13 @@ static bool sBtnLock;
 static float sPidKp, sPidKi, sPidKd, sPidSetpoint;
 static float sStbyOffset, sOtpThresh;
 static float sSmpsOv, sStbyOv, sStbyLow;
+static bool sBassBoost;
+static bool s3dAudio;
+static uint8_t sEqPreset;
+static uint8_t sChannelMode; // 0=Stereo, 1=Left, 2=Right, 3=Mono
+static uint64_t sTempAbRom;
+static uint64_t sTempDRom;
+static uint64_t sTempSmpsRom;
 
 static constexpr const char* K_SPK_PWR = "spk_pwr";
 static constexpr const char* K_FAN_MODE = "fan_mode";
@@ -198,6 +222,13 @@ static constexpr const char* K_OTP_THR = "otp_thr";
 static constexpr const char* K_SMPS_OV = "smps_ov";
 static constexpr const char* K_STBY_OV = "stby_ov";
 static constexpr const char* K_STBY_LOW = "stby_low";
+static constexpr const char* K_BASS_BOOST = "bass_boost";
+static constexpr const char* K_3D_AUDIO = "audio_3d";
+static constexpr const char* K_EQ_PRESET = "eq_preset";
+static constexpr const char* K_CH_MODE = "ch_mode";
+static constexpr const char* K_TEMP_AB_ROM = "temp_ab_rom";
+static constexpr const char* K_TEMP_D_ROM = "temp_d_rom";
+static constexpr const char* K_TEMP_SMPS_ROM = "temp_smps_rom";
 
 static void loadFromNvs() {
   sSpeakerPwr = nvs_get_bool(K_SPK_PWR, true);
@@ -246,7 +277,35 @@ static void loadFromNvs() {
   sOtpThresh = nvs_get_float(K_OTP_THR, 85.0f);
   sSmpsOv = nvs_get_float(K_SMPS_OV, 70.0f);
   sStbyOv = nvs_get_float(K_STBY_OV, 14.5f);
-  sStbyLow = nvs_get_float(K_STBY_LOW, 10.5f);
+  sStbyLow = nvs_get_float(K_STBY_LOW, 3.0f);
+  sBassBoost = nvs_get_bool(K_BASS_BOOST, false);
+  s3dAudio = nvs_get_bool(K_3D_AUDIO, false);
+  sEqPreset = nvs_get_uchar(K_EQ_PRESET, 0);
+  sChannelMode = nvs_get_uchar(K_CH_MODE, 0);
+
+  sTempAbRom = nvs_get_u64_val(K_TEMP_AB_ROM, DS18B20_ADDR_CLASS_AB_DEFAULT);
+  sTempDRom = nvs_get_u64_val(K_TEMP_D_ROM, DS18B20_ADDR_CLASS_D_DEFAULT);
+  sTempSmpsRom = nvs_get_u64_val(K_TEMP_SMPS_ROM, DS18B20_ADDR_SMPS_DEFAULT);
+}
+
+uint64_t stateGetTempRom(uint8_t role) {
+  if (role == 0) return sTempAbRom;
+  if (role == 1) return sTempDRom;
+  if (role == 2) return sTempSmpsRom;
+  return 0;
+}
+
+void stateSetTempRom(uint8_t role, uint64_t rom) {
+  if (role == 0) {
+    sTempAbRom = rom;
+    nvs_put_u64_val(K_TEMP_AB_ROM, rom);
+  } else if (role == 1) {
+    sTempDRom = rom;
+    nvs_put_u64_val(K_TEMP_D_ROM, rom);
+  } else if (role == 2) {
+    sTempSmpsRom = rom;
+    nvs_put_u64_val(K_TEMP_SMPS_ROM, rom);
+  }
 }
 
 void stateInit() {
@@ -332,6 +391,32 @@ uint8_t stateAutoSenseThresh() { return sAutoSenseThr; }
 void stateSetAutoSenseThresh(uint8_t thr) {
   sAutoSenseThr = thr;
   nvs_put_uchar(K_AS_THR, thr);
+}
+
+bool stateGetBassBoost() { return sBassBoost; }
+void stateSetBassBoost(bool en) {
+  sBassBoost = en;
+  nvs_put_bool(K_BASS_BOOST, en);
+}
+
+bool stateGet3dAudio() { return s3dAudio; }
+void stateSet3dAudio(bool en) {
+  s3dAudio = en;
+  nvs_put_bool(K_3D_AUDIO, en);
+}
+
+uint8_t stateGetEqPreset() { return sEqPreset; }
+void stateSetEqPreset(uint8_t p) {
+  if (p > 6) p = 0;
+  sEqPreset = p;
+  nvs_put_uchar(K_EQ_PRESET, p);
+}
+
+uint8_t stateGetChannelMode() { return sChannelMode; }
+void stateSetChannelMode(uint8_t m) {
+  if (m > 3) m = 0;
+  sChannelMode = m;
+  nvs_put_uchar(K_CH_MODE, m);
 }
 
 uint32_t stateLastRtcSync() { return sRtcSyncTs; }
@@ -541,10 +626,10 @@ static void stateSelfTestFail(int step, const char* msg, const char* errCode) {
     if (step < 5) sendSelfTestProgress(5, "Speaker Protection Setup", "SKIP");
     if (step < 6) sendSelfTestProgress(6, "Bluetooth GAIA Scan & Connection", "SKIP");
 
+    powerSetMainRelay(false, PowerChangeReason::Command);
     stStatus = SelfTestStatus::FINISHED;
     stFanDuty = 2000;
 
-    powerSetMainRelay(false, PowerChangeReason::Command);
     buzzStop();
     buzzPattern(BuzzPatternId::ERROR_CONTINUOUS);
 
@@ -629,7 +714,7 @@ void stateTick() {
     }
 
     if (!powerIsOn()) {
-        if (stStatus == SelfTestStatus::RUNNING || stCurrentStep != 0 || stFanDuty != 2000) {
+        if (stStatus == SelfTestStatus::RUNNING) {
             stateSelfTestReset();
         }
         return;
@@ -762,11 +847,18 @@ void stateTick() {
                 sendSelfTestProgress(3, vBuf, "PASS", vSmps);
                 stRes.smps_fault_ok = true;
                 st_s4_logged = true;
-            } else if (elapsed >= 15500) {
-                snprintf(vBuf, sizeof(vBuf), "Checking SMPS Voltage Rail (%.1f V) - Bench mode / Standby rail active", vSmps);
-                sendSelfTestProgress(3, vBuf, "WARN", vSmps);
+            } else if (stateSmpsBypass()) {
+                snprintf(vBuf, sizeof(vBuf), "Checking SMPS Main Power Relay: SMPS = %.1f V (Bypass Mode Active)... [ PASS ]", vSmps);
+                sendSelfTestProgress(3, vBuf, "PASS", vSmps);
                 stRes.smps_fault_ok = true;
                 st_s4_logged = true;
+            } else if (elapsed >= 15500) {
+                snprintf(vBuf, sizeof(vBuf), "SMPS Voltage Rail Under-Voltage / Inactive (%.1f V) - Power rail fault!", vSmps);
+                sendSelfTestProgress(3, vBuf, "FAIL", vSmps);
+                stRes.smps_fault_ok = false;
+                st_s4_logged = true;
+                stateSelfTestFail(3, vBuf, "e-02");
+                return;
             }
         }
 
@@ -909,14 +1001,16 @@ void stateTick() {
                     s_st6Phase = St6Phase::WAIT_BT_BOOT;
                     s_st6PhaseStartMs = millis();
                 } else if (millis() - s_st6PhaseStartMs >= 3500) {
-                    sendSelfTestProgress(6, "Checking QCC5125 Power Detect Pin (GPIO 5) - Module Inactive / Standby", "WARN");
-                    s_st6Phase = St6Phase::WAIT_BT_BOOT;
-                    s_st6PhaseStartMs = millis();
+                    stRes.gaia_bt_ok = false;
+                    stBtConnectAllowed = false;
+                    stBtStepActive = false;
+                    stateSelfTestFail(6, "QCC5125 Power Detect Pin (GPIO 5) LOW / Module Off — Aborting Bluetooth connection", "e-04");
+                    return;
                 }
             }
             else if (s_st6Phase == St6Phase::WAIT_BT_BOOT) {
                 stBtConnectAllowed = false;
-                if (millis() - s_st6PhaseStartMs >= 2000) {
+                if (millis() - s_st6PhaseStartMs >= 2400) {
                     sendSelfTestProgress(6, "Connecting Bluetooth GAIA Module via SPP...", "RUNNING");
                     gaiaResetConnectionState();
                     s_st6Phase = St6Phase::CONNECTING;
@@ -930,15 +1024,15 @@ void stateTick() {
                 uint8_t fails = gaiaGetFailureCount();
                 if (fails != s_st6LastFailCount) {
                     s_st6LastFailCount = fails;
-                    if (fails < 3) {
+                    if (fails < 4) {
                         char msg[96];
-                        snprintf(msg, sizeof(msg), "Bluetooth GAIA connection attempt %d/3 failed, retrying...", fails);
+                        snprintf(msg, sizeof(msg), "Bluetooth GAIA connection attempt %d/4 failed, retrying...", fails);
                         sendSelfTestProgress(6, msg, "RUNNING");
                     }
                 }
 
-                // If 3 attempts failed or phase timed out (18s)
-                if (s_st6LastFailCount >= 3 || (millis() - s_st6PhaseStartMs >= 18000)) {
+                // If 4 attempts failed or phase timed out (22s)
+                if (s_st6LastFailCount >= 4 || (millis() - s_st6PhaseStartMs >= 22000)) {
                     sendSelfTestProgress(6, "Initial connection attempts failed. Power-cycling QCC module...", "WARN");
                     gaiaResetConnectionState();
                     powerHardCycleBt();
@@ -972,7 +1066,7 @@ void stateTick() {
             }
             else if (s_st6Phase == St6Phase::POST_CYCLE_WAIT_BOOT) {
                 stBtConnectAllowed = false;
-                if (millis() - s_st6PhaseStartMs >= 2000) {
+                if (millis() - s_st6PhaseStartMs >= 2400) {
                     sendSelfTestProgress(6, "Retrying Bluetooth GAIA connection after power cycle...", "RUNNING");
                     gaiaResetConnectionState();
                     s_st6LastFailCount = 0;
@@ -986,15 +1080,15 @@ void stateTick() {
                 uint8_t fails = gaiaGetFailureCount();
                 if (fails != s_st6LastFailCount) {
                     s_st6LastFailCount = fails;
-                    if (fails < 3) {
+                    if (fails < 4) {
                         char msg[96];
-                        snprintf(msg, sizeof(msg), "Post-cycle GAIA connection attempt %d/3 failed, retrying...", fails);
+                        snprintf(msg, sizeof(msg), "Post-cycle GAIA connection attempt %d/4 failed, retrying...", fails);
                         sendSelfTestProgress(6, msg, "RUNNING");
                     }
                 }
 
-                // If all 3 post-cycle retries failed or phase timed out (18s)
-                if (s_st6LastFailCount >= 3 || (millis() - s_st6PhaseStartMs >= 18000)) {
+                // If all 4 post-cycle retries failed or phase timed out (22s)
+                if (s_st6LastFailCount >= 4 || (millis() - s_st6PhaseStartMs >= 22000)) {
                     sendSelfTestProgress(6, "Bluetooth GAIA connection failed after power cycle and retries", "FAIL");
                     stRes.gaia_bt_ok = false;
                     stBtConnectAllowed = false;

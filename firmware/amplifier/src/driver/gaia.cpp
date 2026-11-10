@@ -27,7 +27,9 @@ static uint8_t targetAddress[6] = {0x53, 0x4A, 0x52, 0xFE, 0x00, 0xAF};
 enum GaiaConnState {
     GAIA_CONN_IDLE,
     GAIA_CONN_SCANNING,
+    GAIA_CONN_WAIT_SDP,
     GAIA_CONN_SDP_DISCOVERY,
+    GAIA_CONN_WAIT_CONNECT,
     GAIA_CONN_CONNECTING,
     GAIA_CONN_CONNECTED
 };
@@ -37,12 +39,24 @@ static uint32_t s_sppHandle = 0;
 static bool s_isConnected = false;
 static uint32_t s_scanStartMs = 0;
 static uint32_t s_lastScanStartMs = 0;
+static uint32_t s_stateTimerMs = 0;
+static uint32_t s_connectWaitMs = 250;
 static bool s_targetFound = false;
+static uint8_t s_cachedScn = 1;
+static bool s_triedDirectFallback = false;
 
 static uint8_t s_connFailures = 0;
 static uint8_t s_powerCyclesCount = 0;
 static bool s_initialCheckDone = false;
 static int8_t s_lastRssi = 0;
+static uint32_t s_connectedSinceMs = 0;
+static bool s_lowPowerModeActive = false;
+static char s_activeCodecStr[32] = "None";
+static char s_targetMacStr[20] = "53:4A:52:FE:00:AF";
+
+static inline uint32_t gaiaMillis() {
+    return (uint32_t)(esp_timer_get_time() / 1000ULL);
+}
 
 const char* getGaiaStatusString(uint8_t status) {
     switch (status) {
@@ -146,42 +160,44 @@ const char* getGaiaEventName(uint8_t eventId) {
 extern bool powerBtMode();
 static uint32_t s_auxRetryCooldownUntil = 0;
 
+constexpr uint8_t kMaxAttemptsPerCycle = 6;
+constexpr uint8_t kMaxPowerCycles = 3;
+
 static void handleConnectionFailure() {
+    uint32_t now = gaiaMillis();
     s_isConnected = false;
     s_sppHandle = 0;
     s_targetFound = false;
+    s_triedDirectFallback = false;
     s_connFailures++;
+    s_lastScanStartMs = now;
 
-    char errBuf[64];
-    snprintf(errBuf, sizeof(errBuf), "GAIA SPP connection failed. (Attempt %d/3)", s_connFailures);
+    char errBuf[80];
+    snprintf(errBuf, sizeof(errBuf), "GAIA SPP connection failed. (Attempt %d/%d, Cycle %d/%d)", 
+             s_connFailures, kMaxAttemptsPerCycle, s_powerCyclesCount + 1, kMaxPowerCycles);
     commsLog("warn", errBuf);
 
     if (stateSelfTestIsBtStepActive()) {
         s_connState = GAIA_CONN_IDLE;
-        s_lastScanStartMs = 0;
         return;
     }
 
-    if (s_connFailures >= 3) {
+    if (s_connFailures >= kMaxAttemptsPerCycle) {
         s_connFailures = 0;
-        if (s_powerCyclesCount < 1) {
+        if (s_powerCyclesCount < kMaxPowerCycles) {
             s_powerCyclesCount++;
-            if (powerBtMode()) {
-                char cycleBuf[128];
-                snprintf(cycleBuf, sizeof(cycleBuf), "GAIA SPP connection failed 3 times in BT mode. Hard power cycling QCC module (Cycle %d/1)...", s_powerCyclesCount);
-                commsLog("error", cycleBuf);
-                s_connState = GAIA_CONN_IDLE;
-                powerHardCycleBt();
-            } else {
-                commsLog("warn", "GAIA SPP connection failed 3 times in AUX mode. Cooling down 30s before retrying scan...");
-                s_connState = GAIA_CONN_IDLE;
-                s_auxRetryCooldownUntil = (uint32_t)(esp_timer_get_time() / 1000ULL) + 30000;
-            }
+            char cycleBuf[128];
+            snprintf(cycleBuf, sizeof(cycleBuf), 
+                     "GAIA SPP connection failed %d times. Hard power cycling QCC module (Cycle %d/%d)...", 
+                     kMaxAttemptsPerCycle, s_powerCyclesCount, kMaxPowerCycles);
+            commsLog("warn", cycleBuf);
+            s_connState = GAIA_CONN_IDLE;
+            powerHardCycleBt();
         } else {
-            commsLog("error", "GAIA connection failed permanently. Disabling GAIA commands but keeping system ON.");
+            commsLog("warn", "GAIA SPP connection not established after 3 QCC power cycles. Cooling down 25s before retrying scan...");
             s_powerCyclesCount = 0;
             s_connState = GAIA_CONN_IDLE;
-            powerSetBtFailedPerm(true);
+            s_auxRetryCooldownUntil = now + 25000;
         }
     } else {
         s_connState = GAIA_CONN_IDLE;
@@ -241,23 +257,39 @@ static void espGapCb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param) 
             if (s_connState == GAIA_CONN_SCANNING && !s_targetFound && checkDiscoveredDevice(&param->disc_res)) {
                 s_targetFound = true;
                 memcpy(targetAddress, param->disc_res.bda, 6);
+                for (int i = 0; i < param->disc_res.num_prop; i++) {
+                    if (param->disc_res.prop[i].type == ESP_BT_GAP_DEV_PROP_RSSI && param->disc_res.prop[i].val) {
+                        s_lastRssi = *(int8_t*)param->disc_res.prop[i].val;
+                    }
+                }
                 char discMsg[128];
                 snprintf(discMsg, sizeof(discMsg), "Discovered 'Jacktor Audio' (%02X:%02X:%02X:%02X:%02X:%02X) via Bluetooth Scan!",
                          targetAddress[0], targetAddress[1], targetAddress[2], targetAddress[3], targetAddress[4], targetAddress[5]);
                 commsLog("info", discMsg);
+                s_stateTimerMs = gaiaMillis();
                 esp_bt_gap_cancel_discovery();
-                s_connState = GAIA_CONN_SDP_DISCOVERY;
-                commsLog("info", "Starting SPP SDP Discovery...");
-                esp_spp_start_discovery(targetAddress);
             }
             break;
         case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
             if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED) {
-                if (s_connState == GAIA_CONN_SCANNING && !s_targetFound) {
-                    commsLog("warn", "Bluetooth inquiry discovery stopped without finding target device.");
-                    handleConnectionFailure();
+                if (s_connState == GAIA_CONN_SCANNING) {
+                    if (s_targetFound) {
+                        s_stateTimerMs = gaiaMillis();
+                        s_connState = GAIA_CONN_WAIT_SDP;
+                    } else {
+                        commsLog("warn", "Bluetooth inquiry discovery stopped without finding target device.");
+                        handleConnectionFailure();
+                    }
                 }
             }
+            break;
+        case ESP_BT_GAP_PIN_REQ_EVT: {
+            esp_bt_pin_code_t pin_code = {'2', '0', '2', '6'};
+            esp_bt_gap_pin_reply(param->pin_req.bda, true, 4, pin_code);
+            break;
+        }
+        case ESP_BT_GAP_CFM_REQ_EVT:
+            esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
             break;
         default:
             break;
@@ -519,8 +551,10 @@ static void handleIncomingGaiaPacket(const uint8_t* buffer, size_t length) {
 
             case (CMD_GET_EQ_CONTROL | 0x8000):
                 if (is_success && rxPacket.payload.size() >= 2) {
+                    uint8_t preset = rxPacket.payload[1];
+                    stateSetEqPreset(preset);
                     char buf[128];
-                    snprintf(buf, sizeof(buf), "Active EQ Preset: %d (0 = Bypass/Flat, 1-6 = Preset EQ)", rxPacket.payload[1]);
+                    snprintf(buf, sizeof(buf), "Active EQ Preset: %d (0 = Bypass/Flat, 1-6 = Preset EQ) [Saved to NVS]", preset);
                     commsLog("info", buf);
                 } else if (!is_success) {
                     commsLog("warn", "Failed to query EQ Preset.");
@@ -528,13 +562,20 @@ static void handleIncomingGaiaPacket(const uint8_t* buffer, size_t length) {
                 break;
 
             case (CMD_SET_EQ_CONTROL | 0x8000):
-                commsLog("info", is_success ? "ACK: EQ Preset changed successfully." : "ACK: Failed to change EQ Preset.");
+                if (is_success) {
+                    commsLog("info", "ACK: EQ Preset changed successfully. Querying confirmation...");
+                    gaiaSendCommand(CMD_GET_EQ_CONTROL);
+                } else {
+                    commsLog("warn", "ACK: Failed to change EQ Preset.");
+                }
                 break;
 
             case (CMD_GET_BASS_BOOST_CONTROL | 0x8000):
                 if (is_success && rxPacket.payload.size() >= 2) {
+                    bool active = (rxPacket.payload[1] != 0);
+                    stateSetBassBoost(active);
                     char buf[64];
-                    snprintf(buf, sizeof(buf), "Bass Boost Status: %s", rxPacket.payload[1] ? "ACTIVE (ON)" : "INACTIVE (OFF)");
+                    snprintf(buf, sizeof(buf), "Bass Boost Status: %s [Saved to NVS]", active ? "ACTIVE (ON)" : "INACTIVE (OFF)");
                     commsLog("info", buf);
                 } else if (!is_success) {
                     commsLog("warn", "Failed to query Bass Boost status.");
@@ -542,13 +583,20 @@ static void handleIncomingGaiaPacket(const uint8_t* buffer, size_t length) {
                 break;
 
             case (CMD_SET_BASS_BOOST_CONTROL | 0x8000):
-                commsLog("info", is_success ? "ACK: Bass Boost status updated successfully." : "ACK: Failed to update Bass Boost status.");
+                if (is_success) {
+                    commsLog("info", "ACK: Bass Boost status updated successfully. Querying confirmation...");
+                    gaiaSendCommand(CMD_GET_BASS_BOOST_CONTROL);
+                } else {
+                    commsLog("warn", "ACK: Failed to update Bass Boost status.");
+                }
                 break;
 
             case (CMD_GET_3D_ENHANCEMENT_CONTROL | 0x8000):
                 if (is_success && rxPacket.payload.size() >= 2) {
+                    bool active = (rxPacket.payload[1] != 0);
+                    stateSet3dAudio(active);
                     char buf[64];
-                    snprintf(buf, sizeof(buf), "3D Enhancement Status: %s", rxPacket.payload[1] ? "ACTIVE (ON)" : "INACTIVE (OFF)");
+                    snprintf(buf, sizeof(buf), "3D Enhancement Status: %s [Saved to NVS]", active ? "ACTIVE (ON)" : "INACTIVE (OFF)");
                     commsLog("info", buf);
                 } else if (!is_success) {
                     commsLog("warn", "Failed to query 3D Enhancement status.");
@@ -556,7 +604,12 @@ static void handleIncomingGaiaPacket(const uint8_t* buffer, size_t length) {
                 break;
 
             case (CMD_SET_3D_ENHANCEMENT_CONTROL | 0x8000):
-                commsLog("info", is_success ? "ACK: 3D Enhancement status updated successfully." : "ACK: Failed to update 3D Enhancement status.");
+                if (is_success) {
+                    commsLog("info", "ACK: 3D Enhancement status updated successfully. Querying confirmation...");
+                    gaiaSendCommand(CMD_GET_3D_ENHANCEMENT_CONTROL);
+                } else {
+                    commsLog("warn", "ACK: Failed to update 3D Enhancement status.");
+                }
                 break;
 
             case (CMD_GET_USER_EQ_CONTROL | 0x8000):
@@ -785,8 +838,10 @@ static void handleIncomingGaiaPacket(const uint8_t* buffer, size_t length) {
 
             case (CMD_GET_CODEC | 0x8000):
                 if (is_success && rxPacket.payload.size() >= 2) {
+                    const char* name = getCodecName(rxPacket.payload[1]);
+                    snprintf(s_activeCodecStr, sizeof(s_activeCodecStr), "%s", name);
                     char buf[64];
-                    snprintf(buf, sizeof(buf), "Active Audio Codec: %s (0x%02X)", getCodecName(rxPacket.payload[1]), rxPacket.payload[1]);
+                    snprintf(buf, sizeof(buf), "Active Audio Codec: %s (0x%02X)", name, rxPacket.payload[1]);
                     commsLog("info", buf);
                 } else if (!is_success) {
                     commsLog("warn", "Failed to query Active Audio Codec.");
@@ -895,23 +950,37 @@ static void handleIncomingGaiaPacket(const uint8_t* buffer, size_t length) {
 static void espSppCb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param) {
     switch (event) {
         case ESP_SPP_INIT_EVT:
+            esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
             break;
         case ESP_SPP_DISCOVERY_COMP_EVT:
             if (s_connState == GAIA_CONN_SDP_DISCOVERY) {
-                uint8_t scn = 1;
                 if (param->disc_comp.status == ESP_SPP_SUCCESS) {
-                    if (param->disc_comp.scn_num > 0) {
-                        scn = param->disc_comp.scn[0];
-                    }
+                    uint8_t scn = (param->disc_comp.scn_num > 0 && param->disc_comp.scn[0] > 0)
+                                  ? param->disc_comp.scn[0]
+                                  : ((s_cachedScn > 0) ? s_cachedScn : 1);
+                    s_cachedScn = scn;
                     char scnMsg[64];
                     snprintf(scnMsg, sizeof(scnMsg), "SDP discovery complete. SPP Channel SCN = %d", scn);
                     commsLog("info", scnMsg);
-                    s_connState = GAIA_CONN_CONNECTING;
-                    commsLog("info", "Initiating SPP connection...");
-                    esp_spp_connect(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_MASTER, scn, targetAddress);
+                    // Wait 250ms before opening RFCOMM so SDP L2CAP channel closes cleanly on QCC5125
+                    s_stateTimerMs = gaiaMillis();
+                    s_connectWaitMs = 250;
+                    s_connState = GAIA_CONN_WAIT_CONNECT;
                 } else {
-                    commsLog("warn", "SDP discovery failed");
-                    handleConnectionFailure();
+                    if (!s_triedDirectFallback) {
+                        s_triedDirectFallback = true;
+                        if (s_cachedScn == 0) s_cachedScn = 1;
+                        char fbMsg[96];
+                        snprintf(fbMsg, sizeof(fbMsg), "SDP discovery busy (status=0x%02X), falling back to direct RFCOMM SCN %d...",
+                                 param->disc_comp.status, s_cachedScn);
+                        commsLog("info", fbMsg);
+                        s_stateTimerMs = gaiaMillis();
+                        s_connectWaitMs = 350;
+                        s_connState = GAIA_CONN_WAIT_CONNECT;
+                    } else {
+                        commsLog("warn", "SDP discovery failed");
+                        handleConnectionFailure();
+                    }
                 }
             }
             break;
@@ -922,18 +991,44 @@ static void espSppCb(esp_spp_cb_event_t event, esp_spp_cb_param_t *param) {
                 s_connState = GAIA_CONN_CONNECTED;
                 s_connFailures = 0;
                 s_powerCyclesCount = 0;
-                commsLog("info", "Successfully connected to Jacktor Audio QCC Module via SPP!");
+                s_triedDirectFallback = false;
+                s_connectedSinceMs = gaiaMillis();
+                s_lowPowerModeActive = false;
+                commsLog("info", "Successfully connected to Jacktor Audio QCC Module via SPP! Querying live hardware settings...");
                 powerNotifyBtConnected();
+                gaiaSendCommand(CMD_GET_EQ_CONTROL);
+                gaiaSendCommand(CMD_GET_BASS_BOOST_CONTROL);
+                gaiaSendCommand(CMD_GET_3D_ENHANCEMENT_CONTROL);
+                gaiaSendCommand(CMD_GET_USER_EQ_CONTROL);
+                uint8_t ch = stateGetChannelMode();
+                uint8_t chPayload[2] = { 0, ch };
+                gaiaSendCommand(CMD_SET_TWS_AUDIO_ROUTING, chPayload, 2);
+                gaiaSendCommand(CMD_GET_VOLUME);
+                gaiaSendCommand(CMD_GET_CURRENT_BATTERY_LEVEL);
+                gaiaSendCommand(CMD_GET_CURRENT_RSSI);
+                gaiaSendCommand(CMD_GET_CODEC);
             } else {
-                commsLog("warn", "SPP Open Failed");
-                handleConnectionFailure();
+                if (s_connState == GAIA_CONN_CONNECTING) {
+                    char openErr[64];
+                    snprintf(openErr, sizeof(openErr), "SPP Open Failed (status: 0x%02X)", param->open.status);
+                    commsLog("warn", openErr);
+                    handleConnectionFailure();
+                }
             }
             break;
         case ESP_SPP_CLOSE_EVT:
             s_isConnected = false;
             s_sppHandle = 0;
-            s_connState = GAIA_CONN_IDLE;
+            s_connectedSinceMs = 0;
+            s_lowPowerModeActive = false;
+            esp_bredr_tx_power_set(ESP_PWR_LVL_P3, ESP_PWR_LVL_P9);
             powerClearBtFailedPerm();
+            // Only transition to IDLE if we were actively connected or connecting;
+            // ignore late close events that arrive after handleConnectionFailure() already reset state.
+            if (s_connState == GAIA_CONN_CONNECTED || s_connState == GAIA_CONN_CONNECTING) {
+                s_connState = GAIA_CONN_IDLE;
+                s_lastScanStartMs = gaiaMillis();
+            }
             if (param->close.status != ESP_SPP_SUCCESS) {
                 char closeErr[64];
                 snprintf(closeErr, sizeof(closeErr), "SPP Connection closed (status: 0x%02X)", param->close.status);
@@ -1023,13 +1118,19 @@ void gaiaInit() {
         };
         esp_spp_enhanced_init(&spp_cfg);
 
+        esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
+        esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_NONE;
+        esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
+
         esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED;
         esp_bt_pin_code_t pin_code = {'2', '0', '2', '6'};
         esp_err_t err = esp_bt_gap_set_pin(pin_type, 4, pin_code);
         (void)err;
 
-        // Very close distance (~1 cm); reduce ESP32 TX power to minimum (-12 dBm) to minimize RF noise / receiver clipping
-        esp_bredr_tx_power_set(ESP_PWR_LVL_N12, ESP_PWR_LVL_N12);
+        // Start at maximum BR/EDR TX power (+3 dBm to +9 dBm) for initial inquiry/SDP/RFCOMM connection;
+        // once connected and stable, gaiaTick() automatically lowers TX power to -12..-6 dBm to avoid amplifier RF noise.
+        esp_bredr_tx_power_set(ESP_PWR_LVL_P3, ESP_PWR_LVL_P9);
+        s_lowPowerModeActive = false;
     }
 }
 
@@ -1039,6 +1140,82 @@ bool gaiaIsConnected() {
 
 int8_t gaiaGetLastRssi() {
     return s_lastRssi;
+}
+
+const char* gaiaGetConnStateStr() {
+    switch (s_connState) {
+        case GAIA_CONN_CONNECTED: return "connected";
+        case GAIA_CONN_CONNECTING: return "connecting";
+        case GAIA_CONN_SDP_DISCOVERY: return "sdp_discovery";
+        case GAIA_CONN_SCANNING: return "scanning";
+        case GAIA_CONN_WAIT_CONNECT: return "waiting";
+        default: return "idle";
+    }
+}
+
+const char* gaiaGetCodecStr() {
+    return s_activeCodecStr;
+}
+
+bool gaiaIsLowPowerMode() {
+    return s_lowPowerModeActive;
+}
+
+static const char* pwrLevelToDbm(esp_power_level_t lvl) {
+    switch (lvl) {
+        case ESP_PWR_LVL_N12: return "-12 dBm";
+        case ESP_PWR_LVL_N9:  return "-9 dBm";
+        case ESP_PWR_LVL_N6:  return "-6 dBm";
+        case ESP_PWR_LVL_N3:  return "-3 dBm";
+        case ESP_PWR_LVL_N0:  return "0 dBm";
+        case ESP_PWR_LVL_P3:  return "+3 dBm";
+        case ESP_PWR_LVL_P6:  return "+6 dBm";
+        case ESP_PWR_LVL_P9:  return "+9 dBm";
+        default: return "0 dBm";
+    }
+}
+
+const char* gaiaGetTxPowerStr() {
+    // Pada mode standby (power off) atau saat Bluetooth controller disabled, tidak ada data emisi RF
+    if (!powerIsOn() || esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_ENABLED) {
+        return "--";
+    }
+
+    // Jika power QCC mati dan tidak ada koneksi SPP yang sedang terhubung
+    if (!powerHwReadBtReady() && !s_isConnected) {
+        return "--";
+    }
+
+    esp_power_level_t min_lvl = ESP_PWR_LVL_N0;
+    esp_power_level_t max_lvl = ESP_PWR_LVL_P3;
+    esp_err_t err = esp_bredr_tx_power_get(&min_lvl, &max_lvl);
+
+    static char s_txPowerBuf[48];
+    if (err == ESP_OK) {
+        if (s_isConnected) {
+            snprintf(s_txPowerBuf, sizeof(s_txPowerBuf), "Low-Noise (%s..%s)", pwrLevelToDbm(min_lvl), pwrLevelToDbm(max_lvl));
+        } else if (s_connState == GAIA_CONN_SCANNING || s_connState == GAIA_CONN_CONNECTING) {
+            snprintf(s_txPowerBuf, sizeof(s_txPowerBuf), "Scanning (%s..%s)", pwrLevelToDbm(min_lvl), pwrLevelToDbm(max_lvl));
+        } else {
+            snprintf(s_txPowerBuf, sizeof(s_txPowerBuf), "%s..%s", pwrLevelToDbm(min_lvl), pwrLevelToDbm(max_lvl));
+        }
+        return s_txPowerBuf;
+    }
+
+    if (s_isConnected) {
+        return s_lowPowerModeActive ? "Low-Noise (-12..-6 dBm)" : "+3..+9 dBm";
+    } else if (s_connState == GAIA_CONN_SCANNING || s_connState == GAIA_CONN_CONNECTING) {
+        return "Scanning (+3..+9 dBm)";
+    }
+
+    return "--";
+}
+
+const char* gaiaGetTargetMac() {
+    snprintf(s_targetMacStr, sizeof(s_targetMacStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             targetAddress[0], targetAddress[1], targetAddress[2],
+             targetAddress[3], targetAddress[4], targetAddress[5]);
+    return s_targetMacStr;
 }
 
 static bool s_initLogged = false;
@@ -1054,12 +1231,18 @@ void gaiaDisconnect() {
     s_powerCyclesCount = 0;
     s_isConnected = false;
     s_sppHandle = 0;
+    s_connectedSinceMs = 0;
+    s_lowPowerModeActive = false;
+    s_lastRssi = 0;
+    snprintf(s_activeCodecStr, sizeof(s_activeCodecStr), "None");
     s_connState = GAIA_CONN_IDLE;
     s_targetFound = false;
+    s_triedDirectFallback = false;
     s_initLogged = false;
     s_initialCheckDone = false;
     s_auxRetryCooldownUntil = 0;
     s_lastScanStartMs = 0;
+    s_stateTimerMs = 0;
 }
 
 void gaiaResetConnectionState() {
@@ -1073,10 +1256,17 @@ void gaiaResetConnectionState() {
     s_powerCyclesCount = 0;
     s_isConnected = false;
     s_sppHandle = 0;
+    s_connectedSinceMs = 0;
+    s_lowPowerModeActive = false;
+    s_lastRssi = 0;
+    snprintf(s_activeCodecStr, sizeof(s_activeCodecStr), "None");
+    esp_bredr_tx_power_set(ESP_PWR_LVL_P3, ESP_PWR_LVL_P9);
     s_connState = GAIA_CONN_IDLE;
     s_targetFound = false;
+    s_triedDirectFallback = false;
     s_auxRetryCooldownUntil = 0;
     s_lastScanStartMs = 0;
+    s_stateTimerMs = 0;
 }
 
 uint8_t gaiaGetFailureCount() {
@@ -1102,10 +1292,34 @@ void gaiaTick(uint32_t now) {
     }
 
     if (s_isConnected && s_connState == GAIA_CONN_CONNECTED) {
+        // After 3 seconds of stable SPP connection, step down Bluetooth TX power (-12 dBm to -6 dBm)
+        // so high-power RF bursts do not induce noise in the analog amplifier stages
+        if (!s_lowPowerModeActive && s_connectedSinceMs > 0 && (now - s_connectedSinceMs >= 3000)) {
+            esp_bredr_tx_power_set(ESP_PWR_LVL_N12, ESP_PWR_LVL_N6);
+            s_lowPowerModeActive = true;
+            commsLog("info", "Bluetooth link stable — TX power lowered (-12..-6 dBm) for clean amplifier audio.");
+        }
+        static uint32_t s_lastPeriodicRssiMs = 0;
+        if (now - s_lastPeriodicRssiMs >= 5000) {
+            s_lastPeriodicRssiMs = now;
+            gaiaSendCommand(CMD_GET_CURRENT_RSSI);
+        }
         return;
     }
 
     if (powerBtHardCycling()) {
+        return;
+    }
+
+    // Never attempt or continue any Bluetooth connection if QCC5125 Power Detect (GPIO 5) is LOW/off
+    if (!powerHwReadBtReady()) {
+        if (s_connState == GAIA_CONN_SCANNING) {
+            esp_bt_gap_cancel_discovery();
+        }
+        if (s_connState != GAIA_CONN_IDLE) {
+            commsLog("warn", "QCC5125 Power Detect (GPIO 5) LOW — aborting Bluetooth connection attempt.");
+            s_connState = GAIA_CONN_IDLE;
+        }
         return;
     }
 
@@ -1120,61 +1334,125 @@ void gaiaTick(uint32_t now) {
             return;
         }
 
-        // Wait at least 2000ms after QCC power is applied for DSP & BT stack to initialize
-        if (now < powerOnMs || now - powerOnMs < 2000) {
+        // Wait at least 2200ms after QCC power is applied for DSP & BT stack to initialize
+        if (now < powerOnMs || now - powerOnMs < 2200) {
             return;
         }
     }
 
-    static uint32_t btLowStartMs = 0;
-    if (!powerHwReadBtReady()) {
-        if (btLowStartMs == 0) {
-            btLowStartMs = now;
-        }
-        if (now - btLowStartMs >= 2000) {
-            if (s_connState != GAIA_CONN_IDLE) {
-                commsLog("info", "QCC5125 Power Detect (GPIO 5) LOW - Bluetooth module inactive, maintaining AUX mode.");
-                s_connState = GAIA_CONN_IDLE;
-            }
-        }
-        return;
-    } else {
-        btLowStartMs = 0;
-    }
-
     if (s_connState == GAIA_CONN_IDLE) {
         if (powerHwReadBtReady()) {
-            uint32_t scanCooldown = stateSelfTestIsBtStepActive() ? 500 : 1000;
+            // Ensure at least 1200ms cooldown after a previous attempt so Bluedroid ACL teardown finishes cleanly
+            uint32_t scanCooldown = stateSelfTestIsBtStepActive() ? 1200 : 1500;
             if (s_lastScanStartMs == 0 || (now - s_lastScanStartMs >= scanCooldown)) {
+                // Boost TX power to maximum (+3 dBm to +9 dBm) during the connection phase
+                if (s_lowPowerModeActive) {
+                    esp_bredr_tx_power_set(ESP_PWR_LVL_P3, ESP_PWR_LVL_P9);
+                    s_lowPowerModeActive = false;
+                }
                 s_lastScanStartMs = now;
                 s_scanStartMs = now;
-                if (s_connFailures < 2) {
+                s_stateTimerMs = now;
+                s_triedDirectFallback = false;
+
+                if (s_connFailures == 0) {
+                    // Attempt 1: SDP discovery with automatic direct RFCOMM SCN fallback
                     s_targetFound = true;
                     s_connState = GAIA_CONN_SDP_DISCOVERY;
-                    commsLog("info", "QCC5125 ready, launching direct SPP discovery...");
-                    esp_spp_start_discovery(targetAddress);
+                    commsLog("info", "QCC5125 ready, launching direct SPP SDP discovery...");
+                    if (esp_spp_start_discovery(targetAddress) != ESP_OK) {
+                        s_triedDirectFallback = true;
+                        s_connectWaitMs = 250;
+                        s_connState = GAIA_CONN_WAIT_CONNECT;
+                    }
+                } else if (s_connFailures == 1) {
+                    // Attempt 2: Bypass SDP overhead and connect directly to cached/default RFCOMM SCN
+                    s_targetFound = true;
+                    s_triedDirectFallback = true;
+                    if (s_cachedScn == 0) s_cachedScn = 1;
+                    s_connectWaitMs = 150;
+                    s_connState = GAIA_CONN_WAIT_CONNECT;
+                    char dirMsg[80];
+                    snprintf(dirMsg, sizeof(dirMsg), "Launching direct RFCOMM connection on SCN %d...", s_cachedScn);
+                    commsLog("info", dirMsg);
                 } else {
+                    // Attempt 3+: Full GAP inquiry scan to refresh baseband clock offset & address
                     s_targetFound = false;
                     s_connState = GAIA_CONN_SCANNING;
                     commsLog("info", "Scanning for Bluetooth device 'Jacktor Audio' (53:4A:52:FE:00:AF)...");
-                    uint8_t inq_len = stateSelfTestIsBtStepActive() ? 4 : 8;
-                    esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, inq_len, 0);
+                    uint8_t inq_len = stateSelfTestIsBtStepActive() ? 4 : 6;
+                    if (esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, inq_len, 0) != ESP_OK) {
+                        s_targetFound = true;
+                        s_connState = GAIA_CONN_WAIT_SDP;
+                    }
                 }
             }
         }
     }
     else if (s_connState == GAIA_CONN_SCANNING) {
-        uint32_t scanTimeout = stateSelfTestIsBtStepActive() ? 6000 : 10000;
+        // If target was already found and cancel_discovery took > 600ms without event, proceed to WAIT_SDP
+        if (s_targetFound && (now - s_stateTimerMs >= 600)) {
+            s_stateTimerMs = now;
+            s_connState = GAIA_CONN_WAIT_SDP;
+            return;
+        }
+        uint32_t scanTimeout = stateSelfTestIsBtStepActive() ? 6000 : 9000;
         if (!s_targetFound && (now - s_scanStartMs >= scanTimeout)) {
-            commsLog("warn", "Bluetooth 'Jacktor Audio' (53:4A:52:FE:00:AF) not found within timeout!");
+            commsLog("warn", "Bluetooth inquiry timed out, falling back to direct connection with known MAC...");
             esp_bt_gap_cancel_discovery();
-            handleConnectionFailure();
+            s_targetFound = true;
+            s_stateTimerMs = now;
+            s_connectWaitMs = 350;
+            s_connState = GAIA_CONN_WAIT_CONNECT;
         }
     }
-    else if (s_connState == GAIA_CONN_SDP_DISCOVERY || s_connState == GAIA_CONN_CONNECTING) {
-        uint32_t sdpTimeout = stateSelfTestIsBtStepActive() ? 6000 : 8000;
+    else if (s_connState == GAIA_CONN_WAIT_SDP) {
+        if (now - s_stateTimerMs >= 250) {
+            s_scanStartMs = now;
+            s_stateTimerMs = now;
+            s_connState = GAIA_CONN_SDP_DISCOVERY;
+            commsLog("info", "Starting SPP SDP Discovery...");
+            if (esp_spp_start_discovery(targetAddress) != ESP_OK) {
+                s_triedDirectFallback = true;
+                s_connectWaitMs = 250;
+                s_connState = GAIA_CONN_WAIT_CONNECT;
+            }
+        }
+    }
+    else if (s_connState == GAIA_CONN_WAIT_CONNECT) {
+        if (now - s_stateTimerMs >= s_connectWaitMs) {
+            if (s_cachedScn == 0) s_cachedScn = 1;
+            s_scanStartMs = now;
+            s_stateTimerMs = now;
+            s_connState = GAIA_CONN_CONNECTING;
+            char connMsg[80];
+            snprintf(connMsg, sizeof(connMsg), "Initiating SPP RFCOMM connection on SCN %d...", s_cachedScn);
+            commsLog("info", connMsg);
+            if (esp_spp_connect(ESP_SPP_SEC_NONE, ESP_SPP_ROLE_MASTER, s_cachedScn, targetAddress) != ESP_OK) {
+                handleConnectionFailure();
+            }
+        }
+    }
+    else if (s_connState == GAIA_CONN_SDP_DISCOVERY) {
+        uint32_t sdpTimeout = stateSelfTestIsBtStepActive() ? 5500 : 7500;
         if (now - s_scanStartMs >= sdpTimeout) {
-            commsLog("warn", "Bluetooth SDP/SPP connection timed out.");
+            if (!s_triedDirectFallback) {
+                s_triedDirectFallback = true;
+                if (s_cachedScn == 0) s_cachedScn = 1;
+                commsLog("info", "SDP discovery timed out, attempting direct RFCOMM connection fallback...");
+                s_stateTimerMs = now;
+                s_connectWaitMs = 250;
+                s_connState = GAIA_CONN_WAIT_CONNECT;
+            } else {
+                commsLog("warn", "Bluetooth SDP discovery timed out.");
+                handleConnectionFailure();
+            }
+        }
+    }
+    else if (s_connState == GAIA_CONN_CONNECTING) {
+        uint32_t connTimeout = stateSelfTestIsBtStepActive() ? 6500 : 8500;
+        if (now - s_scanStartMs >= connTimeout) {
+            commsLog("warn", "Bluetooth SPP RFCOMM connection timed out.");
             handleConnectionFailure();
         }
     }

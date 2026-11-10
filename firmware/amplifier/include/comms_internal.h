@@ -87,13 +87,6 @@ void sendAckOkFloat(const char *key, float val, bool tone);
 void sendAckOkStr(const char *key, const char *val, bool tone);
 
 void sendAckErr(const char *key, const char *reason);
-void sendOtaEvent(const char *evt);
-void sendOtaEventFieldStr(const char *evt, const char *field, const char *value);
-void sendOtaEventFieldBool(const char *evt, const char *field, bool value);
-
-void sendOtaWriteOk(uint32_t seq);
-void sendOtaWriteErr(uint32_t seq, const char *err);
-void sendOtaError(const char *err);
 
 void sendLogInfoOffset(int32_t offset);
 void sendLogErrorReason(const char *msg, const char *reason);

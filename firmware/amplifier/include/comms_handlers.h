@@ -6,11 +6,6 @@
 void handleJsonLine(const std::string &line, uart_port_t srcPort = UART_NUM_0);
 void handleShellCommand(const std::string &cmd);
 
-void handleCmdOtaBegin(cJSON *item);
-void handleCmdOtaWrite(cJSON *item);
-void handleCmdOtaEnd(cJSON *item);
-void handleCmdOtaAbort(cJSON *item);
-
 void handleAnalyzerJson(cJSON *obj);
 void handleCmdTone(cJSON *item);
 

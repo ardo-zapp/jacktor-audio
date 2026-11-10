@@ -30,12 +30,14 @@ void powerHwInit() {
   out_conf.intr_type = GPIO_INTR_DISABLE;
   out_conf.mode = GPIO_MODE_OUTPUT;
   out_conf.pin_bit_mask = (1ULL << RELAY_SMPS_PIN) |
-                          (1ULL << RELAY_AUDIO_PIN) |
+                          (1ULL << PWR_LED_PIN) |
                           (1ULL << SPEAKER_POWER_SWITCH_PIN) |
                           (1ULL << BT_ENABLE_PIN);
   out_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
   out_conf.pull_up_en = GPIO_PULLUP_DISABLE;
   gpio_config(&out_conf);
+
+  gpio_set_level((gpio_num_t)PWR_LED_PIN, PWR_LED_ACTIVE_HIGH ? 0 : 1);
 
   // Configure Fault Pins (SMPS & Speaker Protect)
   // SMPS_FAULT_PIN (GPIO 15) has internal pull-up enabled to prevent floating LOW on loud vibration/EMI
@@ -47,7 +49,7 @@ void powerHwInit() {
   smps_fault_conf.pull_up_en = GPIO_PULLUP_ENABLE;
   gpio_config(&smps_fault_conf);
 
-  // SPK_PROTECT_LED_PIN (GPIO 34) is an input-only pin on ESP32 without internal pull-up.
+  // SPK_PROTECT_LED_PIN (GPIO 35) is an input-only pin on ESP32 without internal pull-up.
   gpio_config_t spk_in_conf = {};
   spk_in_conf.intr_type = GPIO_INTR_DISABLE;
   spk_in_conf.mode = GPIO_MODE_INPUT;
@@ -135,17 +137,23 @@ static void safeRelaySwitch(gpio_num_t pin, uint32_t level) {
 }
 
 void powerHwSetRelaySmps(bool on) {
+  static int lastSmpsLvl = -1;
   uint32_t lvl = on ? (RELAY_SMPS_ACTIVE_HIGH ? 1 : 0) : (RELAY_SMPS_ACTIVE_HIGH ? 0 : 1);
+  if (lastSmpsLvl == (int)lvl) return;
+  lastSmpsLvl = lvl;
   safeRelaySwitch((gpio_num_t)RELAY_SMPS_PIN, lvl);
 }
 
 void powerHwSetRelayAudio(bool on) {
-  uint32_t lvl = on ? (RELAY_AUDIO_ACTIVE_HIGH ? 1 : 0) : (RELAY_AUDIO_ACTIVE_HIGH ? 0 : 1);
-  safeRelaySwitch((gpio_num_t)RELAY_AUDIO_PIN, lvl);
+  (void)on;
 }
 
 void powerHwSetSpeakerPins(bool powerOn) {
-  safeRelaySwitch((gpio_num_t)SPEAKER_POWER_SWITCH_PIN, powerOn ? 1 : 0);
+  static int lastSpkLvl = -1;
+  uint32_t lvl = powerOn ? 1 : 0;
+  if (lastSpkLvl == (int)lvl) return;
+  lastSpkLvl = lvl;
+  safeRelaySwitch((gpio_num_t)SPEAKER_POWER_SWITCH_PIN, lvl);
 }
 
 void powerHwSetBtPins(bool enable) {

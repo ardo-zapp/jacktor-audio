@@ -44,32 +44,88 @@ d. No Additional Restrictions:
    restrict others from doing anything this license permits.
 
 ================================================================================
-3. THIRD-PARTY COMPONENTS & SPECIAL LICENSES NOTICE
+3. FIRST-PARTY COMPONENTS, KERNEL MODULE (GPL) & THIRD-PARTY NOTICES
 ================================================================================
 
-The Jacktor Audio repository bundles and links against third-party open-source 
-components and subsystem-specific drivers. These components are NOT covered by 
-CC BY-NC-SA 4.0 and remain subject to their respective original copyright 
-holders and open-source licenses:
+3.1 First-Party & Adapted Native Android Binaries (`panel/realme-bengal/bin/`):
+All custom C system utilities and daemons located under `panel/realme-bengal/bin/` 
+— specifically `amp-status`, `aplay`, `audio-test`, `clear`, `esputil`, 
+`jacktor-api`, `jacktor-motd`, `otg-trigger`, and `serial-bridge` — are original 
+works or adaptations authored and copyrighted by Ardo Zapp:
+  Copyright (c) 2026 Ardo Zapp
+  License: CC BY-NC-SA 4.0
 
-- KernelPatch Module Driver (panel/realme-bengal/kpm/usb-serial):
-  Subject to the GNU General Public License v2.0 or later (GPL-2.0-or-later).
-- KissFFT Real-to-Complex Transform Engine (include/driver/kissfft):
+(The sole third-party binary inside `panel/realme-bengal/bin/` is `socat/`, which is a 
+third-party open-source utility governed by the GNU General Public License v2.0 
+as detailed in Section 3.4 below.)
+
+3.2 First-Party Kernel Driver (`usb-serial.kpm` — GPL-2.0-or-later):
+The Universal USB-to-Serial KernelPatch Module driver located at:
+  panel/realme-bengal/kpm/usb-serial/
+is an original work authored and copyrighted by Ardo Zapp:
+  Copyright (c) 2026 Ardo Zapp
+
+Because this driver executes inside Linux kernel space and interfaces directly 
+with Linux kernel symbols, TTY core subsystems, and USB host APIs, it is 
+specifically licensed under the:
+  GNU General Public License v2.0 or later (GPL-2.0-or-later)
+This ensures strict compliance with Linux kernel GPL licensing and prevents any 
+licensing violations or symbol linkage conflicts with the upstream Linux kernel.
+
+3.3 Custom Linux Kernel 4.19 Adaptation & Pre-Patched Partition Images:
+The adapted Linux Kernel (`4.19.152-perf+`) authored and compiled by Ardo Zapp 
+for the Realme C15 Qualcomm Bengal platform (`panel/realme-bengal/image/boot.img.xz`), 
+along with any corresponding kernel patches, is distributed in strict compliance 
+with the:
+  GNU General Public License v2.0 (GPL-2.0-only)
+
+3.4 Third-Party Components & Bundled Open-Source Software:
+The Jacktor Audio repository bundles or links against third-party open-source 
+components and libraries. These components are NOT covered by CC BY-NC-SA 4.0 
+and remain subject to their respective original copyright holders and licenses:
+
+- esputil Base Origin Notice (`panel/realme-bengal/bin/esputil/`):
+  Contains portions derived from cpq/esputil (https://github.com/cpq/esputil), 
+  Copyright (c) 2021-2023 Cesanta Software Limited, licensed under the MIT License. 
+  In accordance with the permissive sublicensing rights of the MIT License, all 
+  subsequent modifications, AArch64 Musl porting, and Jacktor Audio ecosystem 
+  integrations authored by Ardo Zapp are licensed under CC BY-NC-SA 4.0.
+- socat Base Origin & Porting Notice (`panel/realme-bengal/bin/socat/` and bundled binary 
+  in `panel/realme-bengal/modul/jacktor-audio-framework/system/bin/socat`):
+  Originally authored by Gerhard Rieger and contributors (http://www.dest-unreach.org/socat/).
+  Subject to the GNU General Public License v2.0 (GPL-2.0-only).
+  Ported and adapted to standalone AArch64 Musl static build for Android by Ardo Zapp in 
+  full compliance with GPL-2.0-only. Complete source code and build Makefile are maintained in 
+  `panel/realme-bengal/bin/socat/`. The standalone `serial-bridge` daemon executes `socat` as 
+  an independent subprocess via `fork()`/`exec()` and does not link against `socat` libraries.
+- BusyBox NDK (`panel/realme-bengal/modul/jacktor-audio-framework/system/bin/busybox`):
+  Copyright (c) Erik Andersen, Rob Landley, Denys Vlasenko, and contributors.
+  Subject to the GNU General Public License v2.0 (GPL-2.0-only).
+- KissFFT Real-to-Complex Transform Engine (`firmware/amplifier/include/driver/kissfft`):
   Copyright (c) Mark Borgerding. Subject to the 3-Clause BSD License.
-- cJSON Library (firmware/amplifier/managed_components):
+- cJSON Library (`firmware/amplifier/managed_components`):
   Copyright (c) Dave Gamble and cJSON contributors. Subject to the MIT License.
-- esp-idf-lib Drivers (DS3231, ADS1115):
+- esp-idf-lib Drivers (DS3231, ADS1115, i2cdev, esp_idf_lib_helpers):
   Copyright (c) Ruslan V. Uss and contributors. Subject to the MIT / BSD-3-Clause License.
-- Espressif Drivers (onewire_bus, ds18b20):
+- Espressif Drivers (`onewire_bus`, `ds18b20`):
   Copyright (c) Espressif Systems. Subject to the Apache License 2.0.
-- Android Audio Policy Configuration (panel/realme-bengal/modul/jacktor-audio-framework):
+- Android Audio Policy Configuration (`panel/realme-bengal/modul/jacktor-audio-framework`):
   Subject to the Apache License 2.0.
-- Font Awesome Free Web Assets (panel/realme-bengal/modul/jacktor-audio-framework/webroot):
+- JetBrains Mono & Inter Fonts (`panel/realme-bengal/modul/jacktor-audio-framework/webroot/webfonts`):
+  Copyright (c) JetBrains s.r.o. and Rasmus Andersson.
+  Subject to the SIL Open Font License 1.1 (OFL-1.1).
+- Font Awesome Free Web Assets (`panel/realme-bengal/modul/jacktor-audio-framework/webroot`):
   Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License.
 
-The CC BY-NC-SA 4.0 license applies strictly to the original code, firmware logic, 
-DSP signal calibration algorithms, hardware telemetry state machines, scripts, 
-schematics, module frameworks, and documentation authored by Ardo Zapp.
+3.5 Scope of CC BY-NC-SA 4.0:
+Except for the GPL-licensed kernel driver (3.2), custom kernel (3.3), and third-party 
+components (3.4), the Creative Commons Attribution-NonCommercial-ShareAlike 4.0 
+International license applies strictly to all original code, ESP32 firmware logic, 
+DSP signal calibration algorithms, hardware telemetry state machines, native C 
+utilities (`amp-status`, `aplay`, `audio-test`, `clear`, `esputil`, `jacktor-api`, 
+`jacktor-motd`, `otg-trigger`, `serial-bridge`), Android application source code, 
+systemless module configurations, WebUI dashboard, Python automation tools, 
+schematics, and documentation authored or adapted by Ardo Zapp.
 
 ================================================================================
 4. DISCLAIMER OF WARRANTIES & LIMITATION OF LIABILITY

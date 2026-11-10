@@ -1,14 +1,15 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
-    namespace = "com.jacktor.audio.panel"
+    namespace = "com.jacktor.audiopanel"
     compileSdk = libs.versions.coreSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.jacktor.audio.panel"
+        applicationId = "com.jacktor.audiopanel"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
@@ -27,6 +28,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -50,8 +52,6 @@ android {
 }
 
 dependencies {
-    implementation(project(":shared"))
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -64,8 +64,9 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
 
+    implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.usb.serial.android)
+    implementation(libs.kotlinx.serialization.json)
 
     debugImplementation(libs.compose.ui.tooling)
 }

@@ -16,6 +16,8 @@
 #include <ctime>
 #include <sys/time.h>
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
+#include "soc/rtc_io_struct.h"
 #include "i2cdev.h"
 #include "driver/i2c_master.h"
 #include "esp_timer.h"
@@ -23,9 +25,21 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 #include "freertos/task.h"
+#include <vector>
 
 static onewire_bus_handle_t ds18b20_bus = NULL;
-static ds18b20_device_handle_t ds18b20_device = NULL;
+
+struct TempSensorSlot {
+    ds18b20_device_handle_t handle = NULL;
+    uint64_t rom = 0;
+    float currentTemp = NAN;
+    float smoothTemp = NAN;
+    uint8_t nanFailCount = 0;
+    uint8_t spikeCount = 0;
+    bool online = false;
+};
+
+static TempSensorSlot s_tempSlots[TEMP_ROLE_COUNT];
 
 static inline void delayUs(uint32_t us) {
   ets_delay_us(us);
@@ -48,12 +62,26 @@ static uint32_t lastTempMs = 0;
 static bool rtcReady = false;
 static bool s_rtcColdBootDetected = false;
 static volatile bool rtcHwSqwOccurred = false;
+static volatile uint32_t s_hwSqwLastUs = 0;
+static volatile uint32_t s_hwSqwPeriodUs = 0;
+static volatile uint32_t s_hwSqwPulseCount = 0;
 static time_t s_sqwEpoch = 0;
 static uint32_t s_sqwTickCounter = 0;
-static uint32_t s_lastSqwTickMs = 0;
+static volatile uint32_t s_lastSqwTickMs = 0;
 static float rtcTempC = NAN;
 
 static void IRAM_ATTR onRtcSqwIsr(void* arg) {
+  uint32_t now_us = (uint32_t)esp_timer_get_time();
+  if (s_hwSqwLastUs > 0) {
+    uint32_t diff_us = now_us - s_hwSqwLastUs;
+    if (diff_us < 800000ULL) {
+      return; // Debounce EMI / false edge glitch (< 800 ms)
+    }
+    s_hwSqwPeriodUs = diff_us;
+  }
+  s_hwSqwLastUs = now_us;
+  s_hwSqwPulseCount = s_hwSqwPulseCount + 1;
+  s_lastSqwTickMs = (uint32_t)(now_us / 1000ULL);
   rtcHwSqwOccurred = true;
 }
 
@@ -224,40 +252,106 @@ static void syncSystemTimeFromRtc() {
   }
 }
 
-static void ds18b20StartConversion() {
-  if (!ds18b20_device || !ds18b20_bus) return;
-  if (onewire_bus_reset(ds18b20_bus) != ESP_OK) return;
+static void sensorsBindDevices() {
+  if (!ds18b20_bus) return;
 
-  onewire_device_address_t addr = 0;
-  if (ds18b20_get_device_address(ds18b20_device, &addr) != ESP_OK) return;
+  for (int r = 0; r < TEMP_ROLE_COUNT; r++) {
+    if (s_tempSlots[r].handle) {
+      ds18b20_del_device(s_tempSlots[r].handle);
+      s_tempSlots[r].handle = NULL;
+    }
+    s_tempSlots[r].online = false;
+    s_tempSlots[r].rom = stateGetTempRom((uint8_t)r);
+  }
 
-  if (addr == 0) {
-    uint8_t tx[2] = { ONEWIRE_CMD_SKIP_ROM, 0x44 };
-    onewire_bus_write_bytes(ds18b20_bus, tx, sizeof(tx));
-  } else {
-    uint8_t tx[10] = { 0 };
-    tx[0] = ONEWIRE_CMD_MATCH_ROM;
-    memcpy(&tx[1], &addr, sizeof(addr));
-    tx[sizeof(addr) + 1] = 0x44;
-    onewire_bus_write_bytes(ds18b20_bus, tx, sizeof(tx));
+  onewire_device_iter_handle_t iter = NULL;
+  if (onewire_new_device_iter(ds18b20_bus, &iter) == ESP_OK) {
+    onewire_device_t dev;
+    std::vector<onewire_device_t> foundDevices;
+    while (onewire_device_iter_get_next(iter, &dev) == ESP_OK) {
+      foundDevices.push_back(dev);
+    }
+    onewire_del_device_iter(iter);
+
+    // Auto-assignment: If Class AB has no assigned ROM (0), assign first detected sensor!
+    if (s_tempSlots[TEMP_ROLE_CLASS_AB].rom == 0 && !foundDevices.empty()) {
+      s_tempSlots[TEMP_ROLE_CLASS_AB].rom = foundDevices[0].address;
+      stateSetTempRom((uint8_t)TEMP_ROLE_CLASS_AB, foundDevices[0].address);
+      char romHex[24];
+      snprintf(romHex, sizeof(romHex), "%016llX", (unsigned long long)foundDevices[0].address);
+      commsLog("info", (std::string("Auto-assigned DS18B20 1-Wire sensor to Class AB: 0x") + romHex).c_str());
+    }
+
+    // Bind handles to matching ROM addresses
+    for (const auto& fdev : foundDevices) {
+      for (int r = 0; r < TEMP_ROLE_COUNT; r++) {
+        if (s_tempSlots[r].rom != 0 && s_tempSlots[r].rom == fdev.address && !s_tempSlots[r].handle) {
+          ds18b20_config_t ds_cfg = {};
+          if (ds18b20_new_device_from_enumeration((onewire_device_t*)&fdev, &ds_cfg, &s_tempSlots[r].handle) == ESP_OK) {
+            ds18b20_set_resolution(s_tempSlots[r].handle, DS18B20_RESOLUTION_12B);
+            s_tempSlots[r].online = true;
+          }
+        }
+      }
+    }
   }
 }
 
-static float ds18b20ReadTempC() {
-  if (!ds18b20_device) return NAN;
-  float temp = 0.0f;
-  for (int retry = 0; retry < 3; retry++) {
-    esp_err_t res = ds18b20_get_temperature(ds18b20_device, &temp);
-    if (res == ESP_OK) {
-      if (temp == 85.0f || temp <= -40.0f || temp >= 125.0f) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-        continue;
+size_t sensorsScan1WireBus(TempSensorDeviceInfo* outList, size_t maxCount) {
+  if (!ds18b20_bus || !outList || maxCount == 0) return 0;
+
+  ds18b20_trigger_temperature_conversion_for_all(ds18b20_bus);
+  vTaskDelay(pdMS_TO_TICKS(15));
+
+  size_t count = 0;
+  onewire_device_iter_handle_t iter = NULL;
+  if (onewire_new_device_iter(ds18b20_bus, &iter) == ESP_OK) {
+    onewire_device_t dev;
+    while (onewire_device_iter_get_next(iter, &dev) == ESP_OK && count < maxCount) {
+      outList[count].rom = dev.address;
+      outList[count].tempC = NAN;
+      outList[count].role = -1;
+      outList[count].online = true;
+
+      for (int r = 0; r < TEMP_ROLE_COUNT; r++) {
+        if (s_tempSlots[r].rom == dev.address) {
+          outList[count].role = r;
+          break;
+        }
       }
-      return temp;
+
+      ds18b20_config_t ds_cfg = {};
+      ds18b20_device_handle_t tempDev = NULL;
+      if (ds18b20_new_device_from_enumeration(&dev, &ds_cfg, &tempDev) == ESP_OK) {
+        float t = NAN;
+        if (ds18b20_get_temperature(tempDev, &t) == ESP_OK && t != 85.0f && t > -40.0f && t < 125.0f) {
+          outList[count].tempC = t;
+        }
+        ds18b20_del_device(tempDev);
+      }
+      count++;
     }
-    vTaskDelay(pdMS_TO_TICKS(10));
+    onewire_del_device_iter(iter);
   }
-  return NAN;
+  return count;
+}
+
+bool sensorsAssignTempRom(TempSensorRole role, uint64_t rom) {
+  if ((int)role < 0 || (int)role >= TEMP_ROLE_COUNT) return false;
+  stateSetTempRom((uint8_t)role, rom);
+  sensorsBindDevices();
+  return true;
+}
+
+bool sensorsSwapTempRoles(TempSensorRole roleA, TempSensorRole roleB) {
+  if ((int)roleA < 0 || (int)roleA >= TEMP_ROLE_COUNT) return false;
+  if ((int)roleB < 0 || (int)roleB >= TEMP_ROLE_COUNT) return false;
+  uint64_t romA = stateGetTempRom((uint8_t)roleA);
+  uint64_t romB = stateGetTempRom((uint8_t)roleB);
+  stateSetTempRom((uint8_t)roleA, romB);
+  stateSetTempRom((uint8_t)roleB, romA);
+  sensorsBindDevices();
+  return true;
 }
 
 void sensorsInit() {
@@ -273,17 +367,7 @@ void sensorsInit() {
   rmt_fallback_config.max_rx_bytes = 10;
 
   if (onewire_new_bus_rmt(&bus_config, &rmt_fallback_config, &ds18b20_bus) == ESP_OK) {
-      onewire_device_iter_handle_t iter = NULL;
-      if (onewire_new_device_iter(ds18b20_bus, &iter) == ESP_OK) {
-          onewire_device_t next_onewire_device;
-          if (onewire_device_iter_get_next(iter, &next_onewire_device) == ESP_OK) {
-ds18b20_config_t ds_cfg = {};
-
-              ds18b20_new_device_from_enumeration(&next_onewire_device, &ds_cfg, &ds18b20_device);
-              ds18b20_set_resolution(ds18b20_device, DS18B20_RESOLUTION_12B);
-          }
-          onewire_del_device_iter(iter);
-      }
+      sensorsBindDevices();
   }
 
   i2cdev_init();
@@ -299,10 +383,18 @@ ds18b20_config_t ds_cfg = {};
     if (FEAT_RTC_TEMP_TELEMETRY) {
       rtcTempC = ds3231ReadTemp();
     }
+    ds3231_enable_squarewave(&rtc_dev);
     ds3231_set_squarewave_freq(&rtc_dev, DS3231_SQWAVE_1HZ);
 
+    // Route GPIO 36 back to digital GPIO matrix and enable input buffer
+    rtc_gpio_deinit((gpio_num_t)RTC_SQW_PIN);
+    RTCIO.sensor_pads.sense1_mux_sel = 0;
+    RTCIO.sensor_pads.sense1_fun_sel = 0;
+    RTCIO.sensor_pads.sense1_fun_ie = 1;
+    RTCIO.sensor_pads.sense1_hold = 0;
+
     gpio_config_t sqw_conf = {};
-    sqw_conf.intr_type = GPIO_INTR_POSEDGE;
+    sqw_conf.intr_type = GPIO_INTR_NEGEDGE;
     sqw_conf.mode = GPIO_MODE_INPUT;
     sqw_conf.pin_bit_mask = (1ULL << RTC_SQW_PIN);
     sqw_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -318,7 +410,7 @@ ds18b20_config_t ds_cfg = {};
     rtcTempC = NAN;
     rtcHwSqwOccurred = false;
 
-    // Ensure floating GPIO 35 does not generate interrupts when RTC module is missing
+    // Ensure floating GPIO 36 does not generate interrupts when RTC module is missing
     gpio_config_t sqw_conf = {};
     sqw_conf.intr_type = GPIO_INTR_DISABLE;
     sqw_conf.mode = GPIO_MODE_INPUT;
@@ -343,7 +435,9 @@ ds18b20_config_t ds_cfg = {};
   s_sqwTickCounter = 0;
   s_lastSqwTickMs = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
-  ds18b20StartConversion();
+  if (ds18b20_bus) {
+    ds18b20_trigger_temperature_conversion_for_all(ds18b20_bus);
+  }
 }
 
 void sensorsTick(uint32_t now) {
@@ -386,48 +480,89 @@ void sensorsTick(uint32_t now) {
   if (now - lastTempMs >= 1000) {
     lastTempMs = now;
 
-    static uint8_t nanFailCount = 0;
-    static uint8_t spikeCount = 0;
+    if (ds18b20_bus) {
+      // Trigger temperature conversion for all DS18B20 devices simultaneously
+      ds18b20_trigger_temperature_conversion_for_all(ds18b20_bus);
 
-    float t = ds18b20ReadTempC();
-    ds18b20StartConversion();
+      float maxT = NAN;
+      for (int r = 0; r < TEMP_ROLE_COUNT; r++) {
+        if (s_tempSlots[r].handle && s_tempSlots[r].online) {
+          float t = NAN;
+          for (int retry = 0; retry < 3; retry++) {
+            esp_err_t res = ds18b20_get_temperature(s_tempSlots[r].handle, &t);
+            if (res == ESP_OK && t != 85.0f && t > -40.0f && t < 125.0f) {
+              break;
+            }
+            t = NAN;
+            vTaskDelay(pdMS_TO_TICKS(5));
+          }
 
-    if (std::isnan(t) || t <= -40.0f || t >= 125.0f) {
-      nanFailCount++;
-      if (nanFailCount >= 5) {
-        heatC = NAN;
-      }
-    } else {
-      nanFailCount = 0;
-      if (!std::isnan(heatC)) {
-        float diff = std::fabs(t - heatC);
-        if (diff > 3.0f) {
-          spikeCount++;
-          if (spikeCount < 3) {
-            t = heatC;
+          if (std::isnan(t)) {
+            s_tempSlots[r].nanFailCount++;
+            if (s_tempSlots[r].nanFailCount >= 5) {
+              s_tempSlots[r].currentTemp = NAN;
+            }
           } else {
-            spikeCount = 0;
+            s_tempSlots[r].nanFailCount = 0;
+            if (!std::isnan(s_tempSlots[r].smoothTemp)) {
+              float diff = std::fabs(t - s_tempSlots[r].smoothTemp);
+              if (diff > 3.0f) {
+                s_tempSlots[r].spikeCount++;
+                if (s_tempSlots[r].spikeCount < 3) t = s_tempSlots[r].smoothTemp;
+                else s_tempSlots[r].spikeCount = 0;
+              } else {
+                s_tempSlots[r].spikeCount = 0;
+              }
+              s_tempSlots[r].smoothTemp = 0.8f * s_tempSlots[r].smoothTemp + 0.2f * t;
+            } else {
+              s_tempSlots[r].smoothTemp = t;
+              s_tempSlots[r].spikeCount = 0;
+            }
+            s_tempSlots[r].currentTemp = s_tempSlots[r].smoothTemp;
           }
         } else {
-          spikeCount = 0;
+          s_tempSlots[r].currentTemp = NAN;
         }
-        heatC = 0.8f * heatC + 0.2f * t;
-      } else {
-        heatC = t;
-        spikeCount = 0;
+
+        float cur = s_tempSlots[r].currentTemp;
+        if (!std::isnan(cur) && cur > -40.0f && cur < 125.0f) {
+          if (std::isnan(maxT) || cur > maxT) {
+            maxT = cur;
+          }
+        }
       }
+      heatC = maxT;
     }
+  } // End of periodic 1000ms temperature sampling
 
+  // 1 Hz SQW pulse handling (Hardware DS3231 SQW or software fallback)
+  // Evaluated on every tick for zero jitter and perfectly paced 1 Hz pulses
+  bool hwPulse = false;
+  if (rtcHwSqwOccurred) {
+    rtcHwSqwOccurred = false;
+    hwPulse = true;
+  }
 
-    // 1 Hz SQW pulse handling (Hardware DS3231 SQW or software fallback)
-    bool sqwPulsed = false;
-    if (s_rtcColdBootDetected && rtcReady && rtcHwSqwOccurred) {
-      rtcHwSqwOccurred = false;
+  bool hwValid = sensorsIsSqwHwValid();
+
+  if (rtcReady && hwPulse) {
+    s_sqwTickCounter++;
+    s_lastSqwTickMs = now;
+
+    // Update system time strictly paced by 1 Hz SQW hardware pulse
+    if (s_sqwEpoch > 0) {
+      s_sqwEpoch++;
+      struct timeval tv = { .tv_sec = s_sqwEpoch, .tv_usec = 0 };
+      settimeofday(&tv, NULL);
+    } else {
+      syncSystemTimeFromRtc();
+    }
+  } else {
+    // Fallback: ONLY if physical SQW is not connected (!hwValid) or missing pulses (>= 1800 ms)
+    uint32_t fallbackTimeoutMs = hwValid ? 1800 : 1000;
+    if (now - s_lastSqwTickMs >= fallbackTimeoutMs) {
       s_sqwTickCounter++;
       s_lastSqwTickMs = now;
-      sqwPulsed = true;
-
-      // Update system time strictly paced by 1 Hz SQW hardware pulse
       if (s_sqwEpoch > 0) {
         s_sqwEpoch++;
         struct timeval tv = { .tv_sec = s_sqwEpoch, .tv_usec = 0 };
@@ -435,47 +570,40 @@ void sensorsTick(uint32_t now) {
       } else {
         syncSystemTimeFromRtc();
       }
+    }
+  }
+
+  // Periodic non-blocking background RTC temp read (every 30s)
+  static uint32_t lastRtcTempMs = 0;
+  if (now - lastRtcTempMs >= 30000 || lastRtcTempMs == 0) {
+    lastRtcTempMs = now;
+    if (rtcReady && FEAT_RTC_TEMP_TELEMETRY) {
+      rtcTempC = ds3231ReadTemp();
     } else {
-      // Fallback: If RTC was not detected at cold boot, or hardware SQW missed pulses (>= 1200 ms)
-      if (now - s_lastSqwTickMs >= 1000) {
-        s_sqwTickCounter++;
-        s_lastSqwTickMs = now;
-        sqwPulsed = true;
-        if (!s_rtcColdBootDetected && s_sqwEpoch > 0) {
-          s_sqwEpoch++;
-          struct timeval tv = { .tv_sec = s_sqwEpoch, .tv_usec = 0 };
-          settimeofday(&tv, NULL);
-        }
-      }
+      rtcTempC = NAN;
     }
+  }
 
-    // Periodic non-blocking background RTC temp read (every 30s)
-    static uint32_t lastRtcTempMs = 0;
-    if (now - lastRtcTempMs >= 30000 || lastRtcTempMs == 0) {
-      lastRtcTempMs = now;
-      if (rtcReady && FEAT_RTC_TEMP_TELEMETRY) {
-        rtcTempC = ds3231ReadTemp();
-      } else {
-        rtcTempC = NAN;
-      }
-    }
-
-    // Periodic background RTC time resync to guarantee zero drift (every 60s, aligned with SQW tick)
-    static uint32_t lastRtcSyncMs = 0;
-    if (rtcReady && sqwPulsed && (now - lastRtcSyncMs >= 60000)) {
-      lastRtcSyncMs = now;
-      uint8_t sec = 0, min = 0, hour = 0, day = 0, month = 0;
-      uint16_t year = 0;
-      if (ds3231GetTime(sec, min, hour, day, month, year)) {
-        struct tm tm_val = {};
-        tm_val.tm_sec = sec;
-        tm_val.tm_min = min;
-        tm_val.tm_hour = hour;
-        tm_val.tm_mday = day;
-        tm_val.tm_mon = month - 1;
-        tm_val.tm_year = year >= 1900 ? year - 1900 : year;
-        time_t dsEpoch = mktime(&tm_val);
-        if (dsEpoch > 0) {
+  // Periodic background RTC time resync to guarantee zero drift (every 30m if SQW valid, or 60s if fallback)
+  static uint32_t lastRtcSyncMs = 0;
+  uint32_t resyncIntervalMs = hwValid ? 1800000 : 60000;
+  if (rtcReady && (now - lastRtcSyncMs >= resyncIntervalMs)) {
+    lastRtcSyncMs = now;
+    uint8_t sec = 0, min = 0, hour = 0, day = 0, month = 0;
+    uint16_t year = 0;
+    if (ds3231GetTime(sec, min, hour, day, month, year)) {
+      struct tm tm_val = {};
+      tm_val.tm_sec = sec;
+      tm_val.tm_min = min;
+      tm_val.tm_hour = hour;
+      tm_val.tm_mday = day;
+      tm_val.tm_mon = month - 1;
+      tm_val.tm_year = year >= 1900 ? year - 1900 : year;
+      time_t dsEpoch = mktime(&tm_val);
+      if (dsEpoch > 0) {
+        // Only update s_sqwEpoch if difference >= 2 seconds to prevent mid-second colon flicker
+        int64_t diff = (int64_t)dsEpoch - (int64_t)s_sqwEpoch;
+        if (s_sqwEpoch == 0 || diff < -1 || diff > 1) {
           s_sqwEpoch = dsEpoch;
           struct timeval tv = { .tv_sec = dsEpoch, .tv_usec = 0 };
           settimeofday(&tv, NULL);
@@ -517,8 +645,14 @@ bool sensorsRecheckRtc() {
       rtcTempC = ds3231ReadTemp();
     }
     if (!prevReady) {
+      ds3231_enable_squarewave(&rtc_dev);
       ds3231_set_squarewave_freq(&rtc_dev, DS3231_SQWAVE_1HZ);
-      gpio_set_intr_type((gpio_num_t)RTC_SQW_PIN, GPIO_INTR_POSEDGE);
+      rtc_gpio_deinit((gpio_num_t)RTC_SQW_PIN);
+      RTCIO.sensor_pads.sense1_mux_sel = 0;
+      RTCIO.sensor_pads.sense1_fun_sel = 0;
+      RTCIO.sensor_pads.sense1_fun_ie = 1;
+      RTCIO.sensor_pads.sense1_hold = 0;
+      gpio_set_intr_type((gpio_num_t)RTC_SQW_PIN, GPIO_INTR_NEGEDGE);
       gpio_isr_handler_add((gpio_num_t)RTC_SQW_PIN, onRtcSqwIsr, NULL);
     }
   } else {
@@ -540,8 +674,10 @@ float sensorsGetRtcTempC() {
 // 100% non-blocking runtime getters reading ESP-IDF synchronized system time
 bool sensorsGetTimeISO(char* out, size_t n) {
   if (!out || n == 0) return false;
-  time_t now_sec;
-  time(&now_sec);
+  time_t now_sec = (s_sqwEpoch > 0) ? s_sqwEpoch : 0;
+  if (now_sec == 0) {
+    time(&now_sec);
+  }
   struct tm t;
   localtime_r(&now_sec, &t);
   snprintf(out, n, "%04d-%02d-%02dT%02d:%02d:%02dZ",
@@ -564,10 +700,12 @@ bool sensorsSqwConsumeTick() {
 }
 
 bool sensorsGetColonState() {
-  uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
-  uint32_t elapsed = (now >= s_lastSqwTickMs) ? (now - s_lastSqwTickMs) : 0;
-  // Standard digital clock colon: 500 ms ON (0..499 ms), 500 ms OFF (500..999 ms)
-  return (elapsed < 500);
+  if (s_sqwEpoch > 0) {
+    // Standard digital clock colon: strictly locked to 1 Hz epoch pacing
+    return (s_sqwEpoch % 2 == 0);
+  }
+  // Fallback before RTC sync: strictly alternate on each 1 Hz tick
+  return (s_sqwTickCounter % 2 == 0);
 }
 
 void analyzerGetBytes(uint8_t outBands[], size_t nBands) {
@@ -590,8 +728,10 @@ void sensorsSetAnalyzerEnabled(bool en) {
 }
 
 bool sensorsGetRtcTime(uint8_t& hours, uint8_t& minutes) {
-  time_t now_sec;
-  time(&now_sec);
+  time_t now_sec = (s_sqwEpoch > 0) ? s_sqwEpoch : 0;
+  if (now_sec == 0) {
+    time(&now_sec);
+  }
   struct tm t;
   localtime_r(&now_sec, &t);
   hours = (uint8_t)t.tm_hour;
@@ -600,9 +740,13 @@ bool sensorsGetRtcTime(uint8_t& hours, uint8_t& minutes) {
 }
 
 bool sensorsGetUnixTime(uint32_t& epochOut) {
-  time_t now_sec;
-  time(&now_sec);
-  epochOut = (uint32_t)now_sec;
+  if (s_sqwEpoch > 0) {
+    epochOut = (uint32_t)s_sqwEpoch;
+  } else {
+    time_t now_sec = 0;
+    time(&now_sec);
+    epochOut = (uint32_t)now_sec;
+  }
   return true;
 }
 
@@ -647,5 +791,63 @@ bool sensorsIsRtcColdBootDetected() {
 }
 
 bool sensorsHasDs18b20() {
-  return ds18b20_device != NULL;
+  return s_tempSlots[TEMP_ROLE_CLASS_AB].online || s_tempSlots[TEMP_ROLE_CLASS_D].online || s_tempSlots[TEMP_ROLE_SMPS].online;
+}
+
+float sensorsGetTempClassAB() {
+  return s_tempSlots[TEMP_ROLE_CLASS_AB].currentTemp;
+}
+
+float sensorsGetTempClassD() {
+  return s_tempSlots[TEMP_ROLE_CLASS_D].currentTemp;
+}
+
+float sensorsGetTempSmps() {
+  return s_tempSlots[TEMP_ROLE_SMPS].currentTemp;
+}
+
+uint64_t sensorsGetRomClassAB() {
+  return s_tempSlots[TEMP_ROLE_CLASS_AB].rom;
+}
+
+uint64_t sensorsGetRomClassD() {
+  return s_tempSlots[TEMP_ROLE_CLASS_D].rom;
+}
+
+uint64_t sensorsGetRomSmps() {
+  return s_tempSlots[TEMP_ROLE_SMPS].rom;
+}
+
+bool sensorsIsTempOnline(TempSensorRole role) {
+  if ((int)role < 0 || (int)role >= TEMP_ROLE_COUNT) return false;
+  return s_tempSlots[role].online && !std::isnan(s_tempSlots[role].currentTemp);
+}
+
+bool sensorsIsSqwHwValid() {
+  if (!rtcReady) return false;
+  uint32_t now_us = (uint32_t)esp_timer_get_time();
+  // Pulsa fisik harus pernah diterima dalam 2.5 detik terakhir
+  if (s_hwSqwLastUs == 0 || (now_us - s_hwSqwLastUs) > 2500000ULL) {
+    return false;
+  }
+  // Periode berada di rentang frekuensi 1 Hz yang wajar (750 ms .. 1250 ms) dengan toleransi latency
+  return (s_hwSqwPeriodUs >= 750000 && s_hwSqwPeriodUs <= 1250000) ||
+         (s_hwSqwPeriodUs == 0 && s_hwSqwPulseCount > 0);
+}
+
+float sensorsGetSqwFrequency() {
+  if (!sensorsIsSqwHwValid()) return 0.0f;
+  if (s_hwSqwPeriodUs == 0) return 0.0f;
+  return 1000000.0f / (float)s_hwSqwPeriodUs;
+}
+
+const char* sensorsGetSqwStatusStr() {
+  uint32_t now_us = (uint32_t)esp_timer_get_time();
+  if (s_hwSqwLastUs == 0 || (now_us - s_hwSqwLastUs) > 2500000ULL) {
+    return "DISCONNECTED";
+  }
+  if (s_hwSqwPeriodUs < 750000 || s_hwSqwPeriodUs > 1250000) {
+    return "INVALID_FREQ";
+  }
+  return "VALID_1HZ";
 }

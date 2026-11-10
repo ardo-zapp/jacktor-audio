@@ -7,6 +7,8 @@
 #include "sensors.h"
 #include "analyzer.h"
 #include "buzzer.h"
+#include "gaia.h"
+#include "esp_bt.h"
 #include <string>
 #include <cmath>
 #include <vector>
@@ -55,10 +57,32 @@ static void writeNvsSnapshot(cJSON *root) {
   cJSON_AddBoolToObject(nv, "audio_relay", powerGetAudioRelay());
   cJSON_AddBoolToObject(nv, "spk_pwr", stateSpeakerPowerOn());
   cJSON_AddBoolToObject(nv, "bt_en", stateBtEnabled());
+  cJSON_AddNumberToObject(nv, "bt_off_min", stateBtAutoOffMs() / 60000UL);
+  cJSON_AddBoolToObject(nv, "auto_sense_en", stateAutoSenseEnabled());
+  cJSON_AddNumberToObject(nv, "auto_sense_min", stateAutoSenseTimeout());
+  cJSON_AddNumberToObject(nv, "auto_sense_thr", stateAutoSenseThresh());
   cJSON_AddBoolToObject(nv, "btn_lock", stateGetBtnLock());
   cJSON_AddBoolToObject(nv, "smps_bypass", stateSmpsBypass());
   cJSON_AddNumberToObject(nv, "smps_cut", stateSmpsCutoffV());
   cJSON_AddNumberToObject(nv, "smps_rec", stateSmpsRecoveryV());
+  cJSON_AddNumberToObject(nv, "smps_ov", stateSmpsOvThresh());
+  cJSON_AddNumberToObject(nv, "pid_sp", statePidSetpoint());
+  cJSON_AddNumberToObject(nv, "otp_thr", stateOtpThresh());
+  cJSON_AddBoolToObject(nv, "buzz_en", buzzerEnabled());
+  cJSON_AddNumberToObject(nv, "buzz_vol", buzzerGetVolume());
+  cJSON_AddNumberToObject(nv, "sleep_timer", powerGetSleepRemainingMinutes());
+  cJSON_AddBoolToObject(nv, "bass_boost", stateGetBassBoost());
+  cJSON_AddBoolToObject(nv, "audio_3d", stateGet3dAudio());
+  cJSON_AddNumberToObject(nv, "eq_preset", stateGetEqPreset());
+  cJSON_AddNumberToObject(nv, "ch_mode", stateGetChannelMode());
+
+  char romHex[24];
+  snprintf(romHex, sizeof(romHex), "%016llX", (unsigned long long)sensorsGetRomClassAB());
+  cJSON_AddStringToObject(nv, "temp_ab_rom", romHex);
+  snprintf(romHex, sizeof(romHex), "%016llX", (unsigned long long)sensorsGetRomClassD());
+  cJSON_AddStringToObject(nv, "temp_d_rom", romHex);
+  snprintf(romHex, sizeof(romHex), "%016llX", (unsigned long long)sensorsGetRomSmps());
+  cJSON_AddStringToObject(nv, "temp_smps_rom", romHex);
 }
 
 static void writeFeatures(cJSON *root) {
@@ -77,8 +101,9 @@ static void writeErrors(cJSON *arr) {
   float v = getVoltageInstant();
   float v_stby = getVoltageStandby();
 
-  if (!stateSmpsBypass()) {
-    if (v == 0.0f && powerIsOn() && !powerIsInitializing()) cJSON_AddItemToArray(arr, cJSON_CreateString("NO_POWER"));
+  if (!stateSmpsBypass() && powerIsOn() && !powerIsInitializing()) {
+    if (v == 0.0f) cJSON_AddItemToArray(arr, cJSON_CreateString("NO_POWER"));
+    else if (v < stateSmpsCutoffV()) cJSON_AddItemToArray(arr, cJSON_CreateString("SMPS_LOW_VOLTAGE"));
     else if (v > stateSmpsOvThresh()) cJSON_AddItemToArray(arr, cJSON_CreateString("SMPS_OVERVOLTAGE"));
   }
   if (v_stby > stateStbyOvThresh()) cJSON_AddItemToArray(arr, cJSON_CreateString("STBY_OVERVOLTAGE"));
@@ -92,16 +117,6 @@ static void writeErrors(cJSON *arr) {
 }
 
 static void writeWarnings(cJSON *arr) {
-  float v = getVoltageInstant();
-  float v_stby = getVoltageStandby();
-
-  if (!stateSmpsBypass() && v > 0.0f && v < stateSmpsCutoffV()) {
-      cJSON_AddItemToArray(arr, cJSON_CreateString("SMPS_LOW_VOLTAGE"));
-  }
-  if (v_stby > 0.0f && v_stby < stateStbyLowThresh()) {
-      cJSON_AddItemToArray(arr, cJSON_CreateString("STBY_LOW_VOLTAGE"));
-  }
-
   float tc = getHeatsinkC();
   if (powerIsOn() && !std::isnan(tc) && tc >= (stateOtpThresh() - 10.0f)) {
       cJSON_AddItemToArray(arr, cJSON_CreateString("THERMAL_THROTTLING"));
@@ -125,6 +140,10 @@ static void writeAnalyzer(cJSON *data) {
   cJSON_AddNumberToObject(an, "gain_r", analyzerGetGainR());
   cJSON_AddNumberToObject(an, "noise_l", analyzerGetNoiseL());
   cJSON_AddNumberToObject(an, "noise_r", analyzerGetNoiseR());
+  cJSON_AddNumberToObject(an, "dc_l", (int)analyzerGetDcOffsetL());
+  cJSON_AddNumberToObject(an, "dc_r", (int)analyzerGetDcOffsetR());
+  cJSON_AddNumberToObject(an, "p2p_l", (int)analyzerGetP2pL());
+  cJSON_AddNumberToObject(an, "p2p_r", (int)analyzerGetP2pR());
   cJSON_AddBoolToObject(an, "clipping", analyzerIsClipping());
   cJSON_AddNumberToObject(an, "clip_count", analyzerGetClippingCount());
 }
@@ -136,6 +155,27 @@ static void writeBuzzer(cJSON *data) {
   cJSON_AddStringToObject(bz, "last_tone", buzzerLastTone() ? buzzerLastTone() : "none");
   cJSON_AddNumberToObject(bz, "last_ms", buzzerLastToneAt());
   cJSON_AddBoolToObject(bz, "quiet_now", buzzerQuietHoursActive());
+}
+
+static void writeBluetooth(cJSON *data) {
+  cJSON *btObj = cJSON_CreateObject();
+  cJSON_AddItemToObject(data, "bt", btObj);
+  bool qccPwr = powerHwReadBtReady();
+  bool sppConn = gaiaIsConnected();
+  bool isPwrOn = powerIsOn();
+  bool powerInjected = (!isPwrOn && qccPwr);
+  const char* btStatusStr = !qccPwr ? "off" : (sppConn ? "active" : "ready");
+
+  cJSON_AddBoolToObject(btObj, "qcc_pwr", qccPwr);
+  cJSON_AddBoolToObject(btObj, "spp_connected", sppConn);
+  cJSON_AddStringToObject(btObj, "spp_state", gaiaGetConnStateStr());
+  cJSON_AddStringToObject(btObj, "status", btStatusStr);
+  cJSON_AddNumberToObject(btObj, "rssi", isPwrOn && sppConn ? (int)gaiaGetLastRssi() : 0);
+  cJSON_AddBoolToObject(btObj, "esp_bt_active", isPwrOn && esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED);
+  cJSON_AddStringToObject(btObj, "esp_tx_power", gaiaGetTxPowerStr());
+  cJSON_AddStringToObject(btObj, "codec", isPwrOn && sppConn ? gaiaGetCodecStr() : "--");
+  cJSON_AddStringToObject(btObj, "target_mac", gaiaGetTargetMac());
+  cJSON_AddBoolToObject(btObj, "power_injected", powerInjected);
 }
 
 static void writeLinkRealtime(cJSON *link, uint32_t now) {
@@ -166,13 +206,21 @@ void sendRealtimeTelemetry(uint32_t now) {
 
   cJSON_AddBoolToObject(rt, "pwr", powerIsOn());
   cJSON_AddBoolToObject(rt, "spk_pwr", powerGetSpeakerPower());
+  cJSON_AddBoolToObject(rt, "spk_hw_on", powerSpeakerHwOn());
+  cJSON_AddBoolToObject(rt, "spk_detect", powerSpeakerDetectOk());
   cJSON_AddBoolToObject(rt, "spk_fault", powerSpkProtectFault());
   cJSON_AddBoolToObject(rt, "bt_en", powerBtEnabled());
   cJSON_AddBoolToObject(rt, "qcc_pwr", powerHwReadBtReady());
+  cJSON_AddBoolToObject(rt, "spp_connected", gaiaIsConnected());
+  cJSON_AddNumberToObject(rt, "bt_rssi", (powerIsOn() && gaiaIsConnected()) ? (int)gaiaGetLastRssi() : 0);
+  cJSON_AddStringToObject(rt, "bt_status", !powerHwReadBtReady() ? "off" : (gaiaIsConnected() ? "active" : "ready"));
   cJSON_AddBoolToObject(rt, "qcc_fault", powerQccProtectFault());
   cJSON_AddNumberToObject(rt, "v_stby", roundf(getVoltageStandby() * 10.0f) / 10.0f);
   cJSON_AddNumberToObject(rt, "v_smps", roundf(getVoltageInstant() * 10.0f) / 10.0f);
   setFloatOrNull(rt, "heat_c", roundf(getHeatsinkC() * 10.0f) / 10.0f);
+  setFloatOrNull(rt, "heat_ab", roundf(sensorsGetTempClassAB() * 10.0f) / 10.0f);
+  setFloatOrNull(rt, "heat_d", roundf(sensorsGetTempClassD() * 10.0f) / 10.0f);
+  setFloatOrNull(rt, "heat_smps", roundf(sensorsGetTempSmps() * 10.0f) / 10.0f);
 
   const char *mode = analyzerGetMode();
   uint8_t bandsLen = analyzerGetBandsLen();
@@ -198,11 +246,13 @@ void sendRealtimeTelemetry(uint32_t now) {
   cJSON_AddNumberToObject(rt, "thr_r", (int)analyzerGetDiagThrR());
   cJSON_AddNumberToObject(rt, "dc_l", (int)analyzerGetDcOffsetL());
   cJSON_AddNumberToObject(rt, "dc_r", (int)analyzerGetDcOffsetR());
+  cJSON_AddNumberToObject(rt, "p2p_l", (int)analyzerGetP2pL());
+  cJSON_AddNumberToObject(rt, "p2p_r", (int)analyzerGetP2pR());
   cJSON_AddNumberToObject(rt, "s_l", analyzerGetSamplesL());
   cJSON_AddNumberToObject(rt, "s_r", analyzerGetSamplesR());
   cJSON_AddNumberToObject(rt, "raw_l", analyzerGetRawL0());
   cJSON_AddNumberToObject(rt, "raw_r", analyzerGetRawR0());
-  if (mode && strcmp(mode, "fft") == 0) {
+  if (analyzerEnabled() && mode && strcmp(mode, "fft") == 0) {
     const uint8_t *bandsL = analyzerGetBandsL();
     const uint8_t *bandsR = analyzerGetBandsR();
     const uint8_t *bands = analyzerGetBands();
@@ -277,7 +327,9 @@ void sendAnalyzerSnapshot(const char *evt) {
   cJSON_AddNumberToObject(data, "thr_r", (int)analyzerGetDiagThrR());
   cJSON_AddNumberToObject(data, "dc_l", (int)analyzerGetDcOffsetL());
   cJSON_AddNumberToObject(data, "dc_r", (int)analyzerGetDcOffsetR());
-  if (mode && strcmp(mode, "fft") == 0) {
+  cJSON_AddNumberToObject(data, "p2p_l", (int)analyzerGetP2pL());
+  cJSON_AddNumberToObject(data, "p2p_r", (int)analyzerGetP2pR());
+  if (analyzerEnabled() && mode && strcmp(mode, "fft") == 0) {
     const uint8_t *bandsL = analyzerGetBandsL();
     const uint8_t *bandsR = analyzerGetBandsR();
     const uint8_t *bands = analyzerGetBands();
@@ -315,6 +367,40 @@ void sendSlowTelemetry(uint32_t now) {
   setFloatOrNull(data, "heat_c", roundf(getHeatsinkC() * 10.0f) / 10.0f);
   setFloatOrNull(data, "rtc_c", roundf(sensorsGetRtcTempC() * 10.0f) / 10.0f);
 
+  cJSON *thermal = cJSON_CreateObject();
+  cJSON_AddItemToObject(data, "thermal", thermal);
+
+  cJSON *tab = cJSON_CreateObject();
+  cJSON_AddItemToObject(thermal, "class_ab", tab);
+  setFloatOrNull(tab, "temp", roundf(sensorsGetTempClassAB() * 10.0f) / 10.0f);
+  char romBuf[24];
+  snprintf(romBuf, sizeof(romBuf), "%016llX", (unsigned long long)sensorsGetRomClassAB());
+  cJSON_AddStringToObject(tab, "rom", romBuf);
+  cJSON_AddBoolToObject(tab, "online", sensorsIsTempOnline(TEMP_ROLE_CLASS_AB));
+
+  cJSON *td = cJSON_CreateObject();
+  cJSON_AddItemToObject(thermal, "class_d", td);
+  setFloatOrNull(td, "temp", roundf(sensorsGetTempClassD() * 10.0f) / 10.0f);
+  snprintf(romBuf, sizeof(romBuf), "%016llX", (unsigned long long)sensorsGetRomClassD());
+  cJSON_AddStringToObject(td, "rom", romBuf);
+  cJSON_AddBoolToObject(td, "online", sensorsIsTempOnline(TEMP_ROLE_CLASS_D));
+
+  cJSON *tsmps = cJSON_CreateObject();
+  cJSON_AddItemToObject(thermal, "smps", tsmps);
+  setFloatOrNull(tsmps, "temp", roundf(sensorsGetTempSmps() * 10.0f) / 10.0f);
+  snprintf(romBuf, sizeof(romBuf), "%016llX", (unsigned long long)sensorsGetRomSmps());
+  cJSON_AddStringToObject(tsmps, "rom", romBuf);
+  cJSON_AddBoolToObject(tsmps, "online", sensorsIsTempOnline(TEMP_ROLE_SMPS));
+
+  setFloatOrNull(thermal, "max_temp", roundf(getHeatsinkC() * 10.0f) / 10.0f);
+
+  cJSON *sqw = cJSON_CreateObject();
+  cJSON_AddItemToObject(data, "sqw", sqw);
+  cJSON_AddBoolToObject(sqw, "hw_connected", sensorsIsSqwHwValid());
+  cJSON_AddNumberToObject(sqw, "pin", RTC_SQW_PIN);
+  cJSON_AddStringToObject(sqw, "status", sensorsGetSqwStatusStr());
+  cJSON_AddNumberToObject(sqw, "freq", roundf(sensorsGetSqwFrequency() * 100.0f) / 100.0f);
+
   cJSON *inputs = cJSON_CreateObject();
   cJSON_AddItemToObject(data, "inputs", inputs);
   cJSON_AddBoolToObject(inputs, "bt", powerBtMode());
@@ -336,6 +422,7 @@ void sendSlowTelemetry(uint32_t now) {
 
   writeAnalyzer(data);
   writeBuzzer(data);
+  writeBluetooth(data);
   writeNvsSnapshot(data);
 
   sendTelemetry(root);

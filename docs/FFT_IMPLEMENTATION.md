@@ -6,17 +6,16 @@ The Jacktor Audio Analyzer implements a high-precision Stereo Real-Time Spectrum
 
 The system is specifically engineered to meet industrial audio standards:
 1. **ESP-IDF Continuous ADC DMA Driver** (`esp_adc/adc_continuous.h`) featuring *Dual-Channel Interleaved Sampling* at an aggregate conversion rate of **88.2 kHz** (yielding an effective sampling rate of **44.1 kHz per channel** for Left and Right channels simultaneously).
-2. **KissFFT Real-to-Complex Transform Engine** (`kiss_fftr`) with $N=1024$ and a *single-instance shared configuration* twiddle factor for internal DRAM optimization.
+2. **KissFFT Real-to-Complex Transform Engine** (`kiss_fftr`) with $N=1024$ and a *single-instance shared configuration* twiddle factor for internal DRAM optimization, supporting selectable 8, 16, 32, and 64 logarithmic frequency bands.
 3. **Advanced Digital Signal Processing (DSP Pipeline)**:
    - **Sliding-Window Ring Buffer Drainage**: 1024-sample non-blocking DMA ring buffer drain.
    - **Dynamic DC Offset Removal**: Real-time independent mean baseline estimation and compensation per channel.
    - **1-Pole IIR DC Blocker Filter ($R = 0.996\text{f}$)**: Sub-audible DC offset rejection filter ($f_c \approx 25\text{ Hz}$) eliminating ESP32 CMOS input capacitance drift and ground baseline wander.
    - **High-Precision Hann Windowing**: Eliminating spectral leakage.
-   - **GPIO 36 Analog Resistor Scale Compensation ($kAnalogScaleR = 9.80\text{f}$)**: Harmonizing Right Channel ADC measurements with Left Channel against physical voltage divider ratio differences and ESP32 ADC pin input impedance.
    - **Overlapping Welch Spectral Averaging (EMA)**: Per-bin spectral smoothing every 8 ms that suppresses thermal noise fluctuations by up to 3.5×.
    - **Dynamic Leaky Baseline Noise Estimator**: Adaptive dual-rate decay baseline estimator designed to absorb high-frequency SMPS ripple and mains grounding hum (50/100 Hz) without clipping weak audio dynamics.
    - **Coherent Bin Persistence Lock & Noise Gate**: Guaranteeing instant responsiveness at 1% signal volume (-40 dBFS) with a true silence noise floor when no audio is present.
-   - **Precision 16-Band Equalization Curve**: Compensating hardware tone control frequency responses (Bass, Mid, Treble centered at 50%) from 30 Hz to 17 kHz within $\pm 1.5\%$ tolerance.
+   - **Precision Equalization Curve**: Compensating hardware tone control frequency responses from 30 Hz to 18 kHz within $\pm 1.5\%$ tolerance.
    - **Channel Isolation Engine**: Full independent per-channel isolation (`stereo`, `ch left`, `ch right`) with zero cross-talk.
    - **Telemetry & Diagnostic Interface Integration (`deviceinfo`)**: Exposing real-time DC analog voltage and raw ADC values for both L & R channels.
 
@@ -26,41 +25,35 @@ The system is specifically engineered to meet industrial audio standards:
 
 ### 2.1 Analog Input Circuit Schematic
 
-The analog audio input utilizes AC coupling capacitors and resistive voltage divider networks to center the DC bias within the linear range of the ESP32 internal ADC:
+The analog audio input utilizes AC coupling capacitors and resistive voltage divider networks to center the DC bias within the linear range of the ESP32 internal ADC (~1.65V):
 
 ```
-Audio Input (L / GPIO39) ──[ 220nF ]──┬──[ R1: 4.7kΩ ]── VDD (3.3V)
+Audio Input (L / GPIO34) ──[ 220nF ]──┬──[ R1: 4.7kΩ ]── VDD (3.3V)
                                        │
-                                       ├── ESP32 GPIO39 (ADC1_CHANNEL_3 / SENSOR_VN)
+                                       ├── ESP32 GPIO34 (ADC1_CHANNEL_6 / VDET_1)
                                        │
                                        └──[ R2: 4.7kΩ ]── GND (0V)
 
-Audio Input (R / GPIO36) ──[ 220nF ]──┬──[ R3: 4.7kΩ ]── VDD (3.3V)
+Audio Input (R / GPIO39) ──[ 220nF ]──┬──[ R3: 4.7kΩ ]── VDD (3.3V)
                                        │
-                                       ├── ESP32 GPIO36 (ADC1_CHANNEL_0 / SENSOR_VP)
+                                       ├── ESP32 GPIO39 (ADC1_CHANNEL_3 / SENSOR_VN)
                                        │
                                        └──[ R4: 4.7kΩ ]── GND (0V)
 ```
 
-### 2.2 ESP32 ADC Pin Characteristics & Hardware Scale Calibration
+### 2.2 ESP32 ADC Pin Characteristics & Symmetrical Calibration
 
-Physical measurements using a precision multimeter confirm that AC audio signals and DC bias voltages on physical pins GPIO 36 and GPIO 39 are safe, symmetric, and nominal. However, inside the ESP32 silicon:
-- **GPIO 36 (`SENSOR_VP`)** and **GPIO 39 (`SENSOR_VN`)** connect directly to the internal Low-Noise Amplifier (LNA) and RTC controller capacitors.
-- Due to internal pin input impedance, parasitic capacitance, and PCB physical resistor divider tolerances, the raw digital ADC reading on GPIO 36 experiences approximately 9.80× attenuation compared to GPIO 39.
-
-To compensate for this behavior without altering physical hardware traces:
-- The firmware applies precision analog scaling factors:
-  $$\text{hwCompR} = kAnalogScaleR \times (\text{halfWaveR} \,?\, 2.00\text{f} : 1.00\text{f}) \quad \text{where } kAnalogScaleR = 9.80\text{f}$$
-  $$\text{hwCompL} = \text{halfWaveL} \,?\, 2.00\text{f} : 1.00\text{f}$$
-- This compensation balances amplitude response independently for both channels. Symmetrical stereo signals (such as *Stereo Pink Noise* or standard audio generator tones) produce identical VU and spectral magnitude readings (variance $< 0.4\%$).
+- **GPIO 34 (`VDET_1` / `ADC1_CH6`)**: Dedicated Left channel analog audio input.
+- **GPIO 39 (`SENSOR_VN` / `ADC1_CH3`)**: Dedicated Right channel analog audio input.
+- **RTCIO Analog MUX Configuration**: During ADC initialization, RTCIO registers (`RTCIO.adc_pad.adc1_mux_sel` and `RTCIO.sensor_pads.sense4_mux_sel`) are explicitly configured to connect GPIO 34 and GPIO 39 to the analog RTC/ADC module.
 
 ### 2.3 ADC Driver Configuration Parameters
 
 | Parameter | Configured Value | Technical Details |
 |---|---|---|
 | **ADC Unit** | `ADC_UNIT_1` | ESP32 ADC1 unit (immune to Wi-Fi/BT RF interference) |
-| **Channel Left (L)** | `ADC_CHANNEL_3` (GPIO 39) | Left channel audio input |
-| **Channel Right (R)** | `ADC_CHANNEL_0` (GPIO 36) | Right channel audio input |
+| **Channel Left (L)** | `ADC_CHANNEL_6` (GPIO 34) | Left channel audio input |
+| **Channel Right (R)** | `ADC_CHANNEL_3` (GPIO 39) | Right channel audio input |
 | **ADC Resolution** | 12-Bit (`ADC_BITWIDTH_12`) | Digital value range 0 .. 4095 |
 | **ADC Attenuation** | `ADC_ATTEN_DB_12` (0 .. 3.3V) | Must be identical across all continuous ADC1 channels |
 | **Total Sampling Rate** | 88,200 Hz (88.2 kHz) | 2-channel interleaved conversion $\rightarrow$ **44.1 kHz per channel** |
@@ -81,22 +74,21 @@ The end-to-end signal processing pipeline from ADC DMA sampling to visualization
 flowchart TD
     A["ADC1 Continuous DMA (88.2 kHz Dual-Ch)"] --> B["fillSamplesBlocking: Demux L/R"]
     B --> C["RingBuffer L (1024) & RingBuffer R (1024)"]
-    C --> D["Dynamic DC Offset Calculation (mean)"]
+    C --> D["Dynamic DC Offset Calculation (mean ~1.65V)"]
     D --> E["1-Pole IIR DC Blocker Filter (R = 0.996)"]
     E --> F["Hann Windowing"]
     F --> G["Sequential KissFFT Real-to-Complex (N=1024)"]
-    G --> H["Hardware Analog Scaling (Right x 9.80)"]
-    H --> I["Welch EMA Smoothing (alpha: 0.28 / 0.20)"]
-    I --> J["Dynamic Leaky Baseline Noise Estimator"]
-    J --> K["Coherent Bin Lock & Noise Gate"]
-    K --> L["16-Band Equalization Curve (30Hz - 17kHz)"]
-    L --> M["Logarithmic VU Meter & Contrast Mapping"]
-    M --> N["Telemetry Streaming & Visual TUI / Panel"]
+    G --> H["Welch EMA Smoothing (alpha: 0.28 / 0.20)"]
+    H --> I["Dynamic Leaky Baseline Noise Estimator"]
+    I --> J["Coherent Bin Lock & Noise Gate"]
+    J --> K["8/16/32/64-Band Logarithmic Cutoff Mapping"]
+    K --> L["Logarithmic VU Meter & Contrast Mapping"]
+    L --> M["Telemetry Streaming (rt @ 30 FPS)"]
 ```
 
 ### 3.1 1-Pole IIR DC Blocker Filter ($R = 0.996\text{f}$)
 
-On the ESP32, thermal bias variations and CMOS input capacitance introduce *sub-audible baseline wander* (slow drift below 20 Hz). Prior to integrating this filter, these ultra-low frequency drifts accumulated in **Bucket 1 (43.1 Hz)**, producing an apparent phantom noise reading up to `712,080` during absolute silence!
+On the ESP32, thermal bias variations and CMOS input capacitance introduce *sub-audible baseline wander* (slow drift below 20 Hz). Prior to integrating this filter, these ultra-low frequency drifts accumulated in the lowest frequency buckets, producing phantom readings during silence.
 
 A 1-pole IIR DC Blocker is applied independently to channels L and R prior to the FFT transform:
 $$y[n] = x[n] - x[n-1] + R \cdot y[n-1]$$
@@ -115,7 +107,7 @@ dcBlockPrevOutR = outR;
 ```
 
 **Measured Improvements:**
-- Sub-audible noise in Bucket 1 (43.1 Hz) dropped from `712,080` to **absolute 0**.
+- Sub-audible noise in Bucket 1 (43.1 Hz) dropped to **absolute 0**.
 - Genuine sub-bass content (such as 30 Hz and 50 Hz test tones) passes through with pristine fidelity and negligible attenuation.
 
 ### 3.2 Dynamic Leaky Baseline Noise Estimator
@@ -147,97 +139,10 @@ Random thermal noise exhibits diffuse characteristics, hopping randomly across b
 
 ---
 
-## 4. Precision 16-Band Equalization Calibration Table
+## 4. Multi-Band Spectrum Layout (8, 16, 32, 64 Bands)
 
-Calibration was established with the hardware tone control potentiometers (Bass, Middle, Treble) set to their centered neutral position (50%). The `kCalibWeight16` weighting compensates for the analog filter curve of the tone control circuitry:
-
-| Band | Target Frequency | Acoustic Category | Calibration Weight | Cutoff Range (Hz) |
-|:---:|:---:|---|:---:|:---:|
-| **B01** | 30 Hz | Sub-Bass | `16.00f` | 20 – 40 Hz |
-| **B02** | 50 Hz | Sub-Bass | `8.00f` | 40 – 75 Hz |
-| **B03** | 100 Hz | Bass | `3.75f` | 75 – 125 Hz |
-| **B04** | 150 Hz | Mid-Bass | `3.00f` | 125 – 200 Hz |
-| **B05** | 250 Hz | Low-Mid | `1.70f` | 200 – 320 Hz |
-| **B06** | 400 Hz | Mid-Low | `1.55f` | 320 – 500 Hz |
-| **B07** | 650 Hz | Mid | `1.30f` | 500 – 800 Hz |
-| **B08** | 1000 Hz | Mid-High | `1.30f` | 800 – 1300 Hz |
-| **B09** | 1600 Hz | Presence | `1.20f` | 1300 – 2000 Hz |
-| **B10** | 2500 Hz | Presence | `1.22f` | 2000 – 3200 Hz |
-| **B11** | 4000 Hz | High-Mid | `1.22f` | 3200 – 5000 Hz |
-| **B12** | 6000 Hz | High | `1.34f` | 5000 – 8000 Hz |
-| **B13** | 12000 Hz | Treble | `1.48f` | 8000 – 13000 Hz |
-| **B14** | 14000 Hz | Brilliance | `1.28f` | 13000 – 15000 Hz |
-| **B15** | 16000 Hz | Top-Air | `1.60f` | 15000 – 16500 Hz |
-| **B16** | 17000 Hz | Air | `1.35f` | 16500 – 18000 Hz |
-
----
-
-## 5. Channel Isolation Test Modes
-
-The firmware provides independent channel isolation testing via the `testChMode` parameter:
-
-| Mode | Host Command | Operational Behavior |
-|---|---|---|
-| `0` | `ch stereo` | **Normal Stereo Mode:** Left and Right channels are fully analyzed and independently balanced. |
-| `1` | `ch left` | **Pure Left Channel Test:** Left Channel processes normally; Right Channel is forced to `0` (`VU_R = 0`, all `Bands_R = 0`). |
-| `2` | `ch right` | **Pure Right Channel Test:** Right Channel processes normally; Left Channel is forced to `0` (`VU_L = 0`, all `Bands_L = 0`). |
-
----
-
-## 6. Real-Time Diagnostics in `deviceinfo` Command
-
-The `deviceinfo` diagnostic command provides real-time visibility into the analog DC bias voltages and raw digital ADC readings across both channels:
-
-### 6.1 `adc_audio` Object Format in `deviceinfo` Telemetry
-
-```json
-{
-  "type": "deviceinfo",
-  "sensors": {
-    "adc_audio": {
-      "gpio_l": 39,
-      "gpio_r": 36,
-      "raw_l": 1948.5,
-      "raw_r": 2012.3,
-      "v_adc_l": 1.570,
-      "v_adc_r": 1.621
-    }
-  }
-}
-```
-
-### 6.2 Terminal TUI Interface (`tools/cmd.py`)
-
-In the `cmd.py` interactive terminal interface (`deviceinfo` view), these metrics are rendered in real time:
-
-```text
-Hardware Sensors & Rails:
-  • SMPS 65V Rail    : 60.1V (ADS1115 ADC Ch0)
-  • Standby 12V Rail : 12.0V (ADS1115 ADC Ch1)
-  • 3.3V VDD Rail    : 3.3V (ADS1115 ADC Ch2)
-  • ESP32 5V Rail    : 5.0V (ADS1115 ADC Ch3)
-  • RTC DS3231 Temp  : 28.5°C (I2C 0x68 / SQW 1Hz)
-  • Audio ADC Left   : 1.570V (Raw 1949 / GPIO 39)
-  • Audio ADC Right  : 1.621V (Raw 2012 / GPIO 36)
-  • Fault Status     : NONE (GPIO 34 / 39 Opto)
-  • QCC5125 Power    : Active (GPIO 5 Power Detect)
-  • BT Audio Status  : Active (GPIO 23 Connection LED)
-```
-
-This telemetry enables engineers to verify DC bias operating point integrity without disassembling the amplifier chassis for manual multimeter probing.
-
----
-
-## 7. Verification & Benchmark Summary
-
-Comprehensive comparative benchmarks utilizing pure sine wave generators and Stereo Pink Noise demonstrate:
-1. **Low-Level Signal Sensitivity (1% / -40 dBFS)**:
-   - A 1 kHz sine wave at 1% amplitude is reliably captured at Band 8 (`VU = 128 - 134`), with precise noise gate opening.
-   - When the signal terminates, output drops cleanly to 0 in $< 25\text{ ms}$.
-2. **Stereo Channel Balance**:
-   - Stereo Pink Noise testing yields `VU_L = 150` and `VU_R = 151` (amplitude deviation $< 0.4\%$).
-3. **Channel Isolation (Cross-Talk Elimination)**:
-   - In `ch left` mode: left channel is fully responsive, right channel remains strictly 0 with zero capacitive trace bleed-through.
-   - In `ch right` mode: right channel is fully responsive, left channel remains strictly 0.
-4. **Power Supply Noise Rejection**:
-   - The IIR DC Blocker ($R = 0.996\text{f}$) paired with the Dynamic Leaky Baseline Estimator effectively rejects 65V SMPS ripple and cooling fan PWM switching noise, maintaining a clean spectrum floor across the sub-bass and bass regions (30 – 100 Hz).
+The KissFFT engine calculates $N/2 = 512$ real frequency bins spaced at $\Delta f = 44100 / 1024 \approx 43.066\text{ Hz}$. These bins are aggregated into logarithmic frequency groups matching human auditory perception across the 30 Hz to 18 kHz range:
+- **8 Bands**: Compact layout for embedded displays.
+- **16 Bands**: Standard balanced display for WebUI and TUI monitor.
+- **32 Bands**: High-resolution studio monitoring layout.
+- **64 Bands**: Ultra-fine diagnostic spectrum layout for mastering observation.

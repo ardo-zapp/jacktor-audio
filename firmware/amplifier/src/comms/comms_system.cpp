@@ -178,12 +178,14 @@ void handleCmdTune(cJSON *item) {
   if (kd && cJSON_IsNumber(kd)) stateSetPidKd((float)kd->valuedouble);
 
   cJSON *sp = cJSON_GetObjectItem(item, "pid_setpoint");
+  if (!sp) sp = cJSON_GetObjectItem(item, "pid_sp");
   if (sp && cJSON_IsNumber(sp)) stateSetPidSetpoint((float)sp->valuedouble);
 
   cJSON *so = cJSON_GetObjectItem(item, "stby_offset");
   if (so && cJSON_IsNumber(so)) stateSetStbyOffset((float)so->valuedouble);
 
   cJSON *otp = cJSON_GetObjectItem(item, "otp_thresh");
+  if (!otp) otp = cJSON_GetObjectItem(item, "otp_thr");
   if (otp && cJSON_IsNumber(otp)) stateSetOtpThresh((float)otp->valuedouble);
 
   cJSON *sov = cJSON_GetObjectItem(item, "smps_ov");
@@ -262,17 +264,11 @@ void handleCmdRtcSetEpoch(cJSON *item) {
 }
 
 void handleCmdNvsReset(cJSON *item) {
-  if (!cJSON_IsBool(item) || !cJSON_IsTrue(item)) { sendAckErr("nvs_reset", "invalid"); return; }
-  stateFactoryReset();
-  powerSetSpeakerPower(stateSpeakerPowerOn());
-  powerSetBtEnabled(stateBtEnabled());
-  sendAckOkBool("nvs_reset", true, true);
-  forceTel = true;
+  handleCmdFactoryReset(item);
 }
 
 void handleCmdFactoryReset(cJSON *item) {
   if (!cJSON_IsBool(item) || !cJSON_IsTrue(item)) { sendAckErr("factory_reset", "invalid"); return; }
-  if (powerIsOn()) { sendAckErr("factory_reset", "system_active"); return; }
   sendAckOkBool("factory_reset", true, true);
   forceTel = true;
   appPerformFactoryReset("FACTORY RESET (UART)", "uart");
@@ -337,6 +333,9 @@ void handleCmdDeviceInfo(cJSON *item) {
   cJSON_AddStringToObject(rtc, "status", sensorsIsRtcReady() ? (timeOk ? "OK" : "FAULT") : "SYSTEM_FALLBACK");
   if (!std::isnan(rtcT)) cJSON_AddNumberToObject(rtc, "temp_c", rtcT);
   if (timeOk) cJSON_AddStringToObject(rtc, "time", timeIso);
+  cJSON_AddBoolToObject(rtc, "sqw_hw_valid", sensorsIsSqwHwValid());
+  cJSON_AddStringToObject(rtc, "sqw_status", sensorsGetSqwStatusStr());
+  cJSON_AddNumberToObject(rtc, "sqw_freq_hz", roundf(sensorsGetSqwFrequency() * 100.0f) / 100.0f);
   cJSON_AddItemToObject(sensors, "ds3231_rtc", rtc);
 
   cJSON *ads = cJSON_CreateObject();
@@ -384,8 +383,8 @@ void handleCmdDeviceInfo(cJSON *item) {
   cJSON_AddNumberToObject(adcAudio, "raw_r", roundf(dcR * 10.0f) / 10.0f);
   cJSON_AddNumberToObject(adcAudio, "v_adc_l", roundf(vAdcL * 1000.0f) / 1000.0f);
   cJSON_AddNumberToObject(adcAudio, "v_adc_r", roundf(vAdcR * 1000.0f) / 1000.0f);
-  cJSON_AddNumberToObject(adcAudio, "gpio_l", 39);
-  cJSON_AddNumberToObject(adcAudio, "gpio_r", 36);
+  cJSON_AddNumberToObject(adcAudio, "gpio_l", I2S_ADC_GPIO_L);
+  cJSON_AddNumberToObject(adcAudio, "gpio_r", I2S_ADC_GPIO_R);
   cJSON_AddItemToObject(sensors, "adc_audio", adcAudio);
 
   cJSON_AddItemToObject(root, "sensors", sensors);

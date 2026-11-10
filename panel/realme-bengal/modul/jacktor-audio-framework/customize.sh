@@ -35,7 +35,20 @@ set_perm_recursive "$MODPATH/system/vendor/lib64" 0 0 0755 0644
 set_perm "$MODPATH/service.sh" 0 0 0755
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 chmod 755 "$MODPATH/system/bin/"* 2>/dev/null
-chmod 755 "$MODPATH/webroot/cgi-bin/"* 2>/dev/null
+
+# 2.1 Jacktor API CGI Gateway Symlink
+ui_print "- Configuring Jacktor API CGI gateway symlink..."
+mkdir -p "$MODPATH/webroot/cgi-bin"
+rm -f "$MODPATH/webroot/cgi-bin/api.sh" "$MODPATH/webroot/cgi-bin/api" 2>/dev/null
+ln -sf ../../system/bin/jacktor-api "$MODPATH/webroot/cgi-bin/jacktor-api" 2>/dev/null
+chmod 755 "$MODPATH/webroot/cgi-bin/jacktor-api" 2>/dev/null
+
+# 2.2 OpenSSH Core & rsync Wrapper Symlinks
+ui_print "- Configuring OpenSSH & rsync wrapper symlinks..."
+for tool in scp sftp sftp-server ssh ssh-keygen sshd sshd-auth sshd-session rsync; do
+    rm -f "$MODPATH/system/bin/$tool" 2>/dev/null
+    ln -sf /system/usr/libexec/ssh-core/wrapper "$MODPATH/system/bin/$tool" 2>/dev/null
+done
 
 # 3. BusyBox NDK Setup (ARM64) & Dynamic Applet Symlinks
 # Architecture: ARM64-v8a (Qualcomm Bengal)
@@ -74,14 +87,16 @@ EOF
     ui_print "- Default Audio Gain: Unity (0 dB) / Max Clean Output"
 fi
 
-[ ! -f "$MODPATH/config/cpu_profile" ] && echo "performance" > "$MODPATH/config/cpu_profile"
+[ ! -f "$MODPATH/config/cpu_profile" ] && echo "balanced" > "$MODPATH/config/cpu_profile"
+[ ! -f "$MODPATH/config/stay_on_mode" ] && echo "normal" > "$MODPATH/config/stay_on_mode"
+[ ! -f "$MODPATH/config/battery_bypass" ] && echo "true" > "$MODPATH/config/battery_bypass"
 [ ! -f "$MODPATH/config/resampler_mode" ] && echo "highest" > "$MODPATH/config/resampler_mode"
 [ ! -f "$MODPATH/config/usb_mode_state" ] && echo "auto" > "$MODPATH/config/usb_mode_state"
-[ ! -f "$MODPATH/config/httpd.conf" ] && printf "/:*\n" > "$MODPATH/config/httpd.conf"
+[ ! -f "$MODPATH/config/httpd.conf" ] && printf "A:*\n" > "$MODPATH/config/httpd.conf"
 if [ ! -f "$MODPATH/config/auth.conf" ]; then
     cat << 'EOF' > "$MODPATH/config/auth.conf"
 username=root
-password=admin123
+password=furry2026
 EOF
 fi
 chmod 600 "$MODPATH/config/auth.conf" 2>/dev/null

@@ -1,70 +1,91 @@
-# Amplifier Unit (ESP32)
+# Amplifier Electronic Control Unit (ESP32-WROOM-32)
 
-This firmware serves as the central Electronic Control Unit (ECU) of the Jacktor Audio smart ecosystem using a *Single-Node* architecture. It is built on the **ESP-IDF** framework using FreeRTOS to guarantee high-precision timing for ESP-IDF ADC Continuous DMA conversion, 32-Band FFT calculations, asynchronous UART communications, and thermal data acquisition to ensure hardware stability.
+This directory contains the firmware source code for the dedicated Electronic Control Unit (ECU) of the **Jacktor Audio** smart ecosystem. Built on **pure Espressif ESP-IDF v6+** using FreeRTOS (C++17), it enforces hard real-time deterministic timing for continuous dual-channel DMA ADC sampling, 32-band KissFFT digital signal processing, hardware safety automation, and full-duplex JSON telemetry streaming at **921,600 bps**.
 
-## Protection Mechanisms & Professional Features
+---
 
-- **Proactive Thermal Throttling**: Before reaching the critical OTP threshold (85°C), the system triggers *Thermal Throttling* (forcing the fan to 100%) as soon as the temperature reaches 75°C. This provides pre-emptive safety without shutting down the system immediately.
-- **Speaker Protector Stability**: Monitors the speaker protection line (GPIO 34) with a 5-second stabilization grace period after speaker relay (GPIO 25) activation, mitigating *false-positive* triggers during capacitor charge cycles at power-on.
-- **Hardware Setup & Diagnostics Sequence**: Performs a safe step-by-step diagnostic on boot:
-  1. **Cooling Fan Diagnostic**: 10-second test (3s ramp up, 4s hold at 100% max speed, 3s ramp down).
-  2. **I2C Bus Scan**: Active bus scan for RTC (DS3231) and Voltmeter (ADS1115). On failure, logs a full bus scan across addresses 1–127 and powers off to standby.
-  3. **Power Relays & Voltage Check**: SMPS and Audio relays activation and rail voltage validation.
-  4. **SMPS Hardware Fault Check**: Real-time optocoupler fault pin reading (GPIO 15).
-  5. **Speaker Power & Protector Monitor**: 5-second stabilization and optocoupler status check (GPIO 34).
-- **QCC Power Detection (GPIO 5)**: Real-time monitoring of `QCC_PWR_DETECT_PIN` (active HIGH) with a 2-second timeout before establishing GAIA SPP Bluetooth connection.
-- **TM1637 4-Digit 7-Segment Display**: Bit-banging driver on GPIO 18 (CLK) and GPIO 19 (DIO) providing visual status feedback:
-  - `"  on"`: Booting, setup phase, and QCC GAIA connection (held for 500ms prior to setup diagnostics).
-  - `"pass"`: Setup passed (displayed for 2s).
-  - `" err"` -> `" off"`: Setup/system failure (displayed for 2s each before returning to standby clock).
-  - `"  bt"` / `" aux"`: Runtime active input source.
-  - `" usb"`: USB DAC mode active on the control panel.
-  - `"HH:MM"`: Standby mode clock display with a 1 Hz SQW-synchronized colon (`:`) blinking (500ms ON / 500ms OFF).
-- **Hardware SQW 1 Hz Timekeeping**: Monotonic epoch advancement strictly synchronized to the physical falling edge of the DS3231 1 Hz SQW pin (GPIO 35), eliminating internal timer drift and providing sub-millisecond precision timestamps.
-- **Standby Fan & State Management**: In standby mode, all runtime states are completely reset. The cooling fan operates dynamically based on heatsink temperature—spinning to dissipate residual heat and fully stopping once cooled below threshold—unlike runtime mode which maintains a low idle speed.
-- **Advanced Diagnostics (Hour Meter)**: Tracks total operational runtime in minutes and persists it to NVS along with peak heatsink temperature and fault history.
-- **KissFFT Spectrum Analyzer**: High-performance audio analyzer algorithm with *Dynamic DC Removal*, *1-Pole IIR DC Blocker ($R=0.996$)*, and *Hardware Analog Resistor Compensation ($kAnalogScaleR = 9.80$)* on GPIO 36/39.
-- **SMPS Hardware Fault (Latching)**: Detects hardware-level SMPS faults via an optocoupler, triggering a repeating acoustic alarm until resolved or manually silenced.
-- **Smart Power Logic**: Features software debouncing (50ms) and automatic state synchronization to prevent *relay chattering* and power looping under strong electromagnetic interference (EMI). Persistent NVS tracks disabled modules (e.g. QCC, speaker protector) to prevent false error triggers across reboots.
+## 1. Subsystems & Protection Mechanisms
 
-## GPIO Mapping (Pinout & Wiring)
+- **Deterministic Dual-Core Processing**:
+  - **Core 0 (Audio Signal Engine)**: Dedicated continuous DMA ADC sampling (44.1 kHz per channel across GPIO 34 and GPIO 39), Hann windowing, 1-pole IIR DC blocker ($R=0.996$), and 8/16/32/64-band KissFFT real-to-complex transformations.
+  - **Core 1 (Safety & System Automation)**: Executes the safety finite state machine (FSM), multi-sensor polling, thermal PWM regulation, TM1637 display updates, and UART telemetry framing.
+- **Multi-Sensor Thermal Monitoring (GPIO 27)**:
+  - 1-Wire bus supporting up to 3 individual **DS18B20 digital temperature sensors** differentiated by unique 64-bit hardware ROM addresses stored in NVS (`temp_ab_rom`, `temp_d_rom`, `temp_smps_rom`):
+    - **Stereo Amplifier Temperature** (`amp_stereo_temp` — physically verified: `0x1024020001892428`)
+    - **Subwoofer Amplifier Temperature** (`amp_sub_temp`)
+    - **SMPS Power Supply Temperature** (`amp_smps_temp`)
+  - Supports dynamic address scanning (`temp-scan`), role assignment (`temp-assign`), and role swapping (`temp-swap`) without firmware reflashing.
+- **Proactive Closed-Loop Thermal Regulation**:
+  - Automatically modulates fan speed via 25 kHz PWM (GPIO 32) using a 3-point temperature curve.
+  - Before reaching the critical Over-Temperature Protection (OTP 85°C) trip threshold, *Thermal Throttling* forces the fan to 100% at 75°C to arrest thermal runaway without interrupting audio.
+  - In standby mode, residual heat dissipation runs dynamically until the heatsink cools below threshold, at which point the fan stops completely.
+- **4-Channel High-Precision Voltage Monitoring (ADS1115 I2C `0x48`)**:
+  - **Channel 0**: SMPS 65V Rail (under-voltage cutoff at 50.0V, recovery at 52.0V).
+  - **Channel 1**: Standby Rail (continuous 4.3V – 12V; protected from triggering false UVLO alarms).
+  - **Channel 2**: Logic 3.3V VDD Rail.
+  - **Channel 3**: System 5.0V Rail.
+- **Hardware SQW 1 Hz Timekeeping & Colon Pacing**:
+  - Monotonic epoch counter advanced directly by the physical falling edge of the DS3231 RTC 1 Hz SQW pin (GPIO 36).
+  - Drives the TM1637 4-digit 7-segment display clock colon (`:`) strictly on hardware pulses (500ms ON / 500ms OFF) with zero timer drift or microsecond jitter.
+- **Speaker Protector Stability**:
+  - Monitors the speaker protection board status (GPIO 35 optocoupler) with a 5-second stabilization grace period after speaker relay (GPIO 25) activation, avoiding false-positive DC trips during initial capacitor charging.
+- **QCC5125 Bluetooth Co-Processor & Low-Noise RF**:
+  - Real-time power detection on GPIO 5 (`QCC_PWR_DETECT_PIN`). If LOW, the GAIA SPP connection aborts immediately (`E-04`).
+  - Dynamic TX power management: high RF power during pairing/handshake, automatically attenuated to low-noise power (-12 dBm to -6 dBm) after 3 seconds of connection stability to eliminate analog floor noise.
 
-GPIO mappings are configured in [`include/config.h`](include/config.h). Understanding this pin layout is critical for proper physical wiring and code development.
+---
 
-| Component / Function | GPIO (ESP32) | Specification & Details |
-| :--- | :---: | :--- |
-| **Main Power Button** | `13` | Input (*Active LOW*) with 50ms software debouncing. |
-| **Boot / Factory Reset Button** | `0` | Default ESP32 board button; held with the power button for 5 seconds for factory reset. |
-| **UART RX (Service Port)** | `16` | Receive line for debugging & system tuning (921,600 bps). |
-| **UART TX (Service Port)** | `17` | Transmit line for debugging & system tuning (921,600 bps). |
-| **LED UART Indicator** | `2` | On-board activity LED pulsing during RX/TX communications. |
-| **I2C SDA** | `21` | Data Line (RTC DS3231, ADS1115 Voltmeter, PCF8574). |
-| **I2C SCL** | `22` | Clock Line (RTC DS3231, ADS1115 Voltmeter, PCF8574). |
-| **ADC Audio In R** | `36` | `ADC1_CH0` (Internal). Reads the Right audio channel signal for FFT/VU (`adc_continuous`). |
-| **ADC Audio In L** | `39` | `ADC1_CH3` (Internal). Reads the Left audio channel signal for FFT/VU (`adc_continuous`). |
-| **Heatsink Temp Sensor** | `27` | 1-Wire protocol for the `DS18B20` temperature sensor. |
-| **Heatsink Fan (PWM)** | `32` | PWM control signal (10-bit, 25kHz) for dynamic fan speed control. |
-| **Relay SMPS** | `14` | Output (*Active HIGH*). Main SMPS power relay. Default *OFF*. |
-| **Speaker Power Switch** | `25` | Output controlling the speaker protection relay. |
-| **Relay Audio** | `26` | Output (*Active HIGH*). Active ON during audio program execution (NES, USB DAC, DAP, etc.). |
-| **Buzzer** | `33` | PWM output for acoustic feedback and warning/error alarms. |
-| **SMPS Fault Detect** | `15` | Optocoupler input reading the SMPS fault indicator (*Active LOW*). |
-| **Speaker Protect LED Monitor** | `34` | Optocoupler input monitoring the speaker protection board status. |
-| **RTC SQW Input** | `35` | 1 Hz square wave input from the RTC module. |
-| **Bluetooth Power Enable** | `4` | Output enabling/disabling power to the QCC Bluetooth module. |
-| **QCC Power Detect** | `5` | Input (*Active HIGH*) detecting power status of the QCC Bluetooth module (`QCC_PWR_DETECT_PIN`). |
-| **TM1637 CLK** | `18` | Clock signal for TM1637 4-digit 7-segment display (`TM1637_CLK_PIN`). |
-| **TM1637 DIO** | `19` | Data signal for TM1637 4-digit 7-segment display (`TM1637_DIO_PIN`). |
-| **Bluetooth Connection Indicator** | `23` | Input detecting audio connection status from the Bluetooth module (`BT_STATUS_PIN`). |
+## 2. GPIO Mapping (Pinout & Wiring)
 
-## JSON Communication Protocol
+Configured centrally in [`include/config.h`](include/config.h):
 
-The amplifier utilizes a full-duplex asynchronous protocol over USB Serial (to the Android Panel) running at **921,600 bps**, broadcasting the following telemetry frames:
-1. **`rt` (Realtime) ~ 30 Hz**: Carries 16-Band FFT spectrum arrays, VU status, and active input mode (Bluetooth/AUX).
-2. **`hz1` (Diagnostic) ~ 1 Hz**: Carries supply voltage levels (SMPS & 12V), remaining sleep timer minutes, heatsink temperature (`heat_c`), relay statuses, and active `errors[]` (triggered on hardware failures like Speaker Protection or OTP).
+| Component / Function | GPIO (ESP32) | Mode / Type | Specification & Details |
+| :--- | :---: | :---: | :--- |
+| **Main Power Button** | `13` | Input | Active LOW with 150ms software debouncing. |
+| **Boot / Factory Reset Button** | `0` | Input | Held with power button for 5 seconds for factory reset. |
+| **UART RX (Service Port)** | `16` | Input | High-speed telemetry & control line (**921,600 bps**). |
+| **UART TX (Service Port)** | `17` | Output | High-speed telemetry & control line (**921,600 bps**). |
+| **LED UART Activity** | `2` | Output | On-board activity LED pulsing during RX/TX communication. |
+| **I2C SDA** | `21` | In/Out | Data Line: RTC DS3231 (`0x68`), ADS1115 (`0x48`), PCF8574. |
+| **I2C SCL** | `22` | Output | Clock Line: RTC DS3231 (`0x68`), ADS1115 (`0x48`), PCF8574. |
+| **Audio In Left (ADC)** | `34` | Analog | `ADC1_CH6` (VDET_1). Continuous DMA sampling (44.1 kHz). |
+| **Audio In Right (ADC)** | `39` | Analog | `ADC1_CH3` (SENSOR_VN). Continuous DMA sampling (44.1 kHz). |
+| **Speaker Protect Monitor** | `35` | Input | Optocoupler input reading speaker protector status. |
+| **RTC SQW Input** | `36` | Input | 1 Hz square wave falling-edge interrupt from DS3231. |
+| **1-Wire Temperature Bus** | `27` | In/Out | Bus for up to 3 multi-drop DS18B20 digital sensors. |
+| **Cooling Fan (PWM)** | `32` | Output | 10-bit, 25 kHz PWM for closed-loop thermal regulation. |
+| **Relay SMPS** | `14` | Output | Active HIGH. Controls the main SMPS 65V power relay. |
+| **Relay Speaker** | `25` | Output | Controls the speaker protection disconnect relay. |
+| **Power Button LED** | `26` | Output | Active HIGH indicator LED for the main power switch. |
+| **Acoustic Buzzer** | `33` | Output | LEDC PWM output for tactile clicks and alarm tones. |
+| **SMPS Fault Detect** | `15` | Input | Active LOW optocoupler reading SMPS hardware fault trip. |
+| **Bluetooth Power Enable** | `4` | Output | Controls power gate to Qualcomm QCC5125 module. |
+| **QCC Power Detect** | `5` | Input | Active HIGH confirmation of QCC module power. |
+| **Bluetooth Audio Status** | `23` | Input | Real-time indication of Bluetooth streaming state. |
+| **TM1637 Display CLK** | `18` | Output | Clock line for 4-digit 7-segment display. |
+| **TM1637 Display DIO** | `19` | In/Out | Data line for 4-digit 7-segment display. |
 
-Every valid instruction sent from the controller (e.g. `{"type":"cmd","cmd":{"power":false}}`) is acknowledged with a short acoustic click (`buzzerClick()`), confirming execution at the hardware level.
+---
 
-> [!IMPORTANT]
-> **Initial Manual Flash Requirement for Upload Scripts**
-> To use `tools/upload.py`, the ESP32 Amplifier MUST be manually flashed via USB cable AT LEAST ONCE using `pio run -t upload`. Manual initial flashing places the Jacktor Audio firmware signature onto the microcontroller, enabling `tools/upload.py` to automatically verify device identity via serial when uploading directly over USB or via ADB to the Android Panel.
+## 3. Communication Protocol (UART0 @ 921,600 bps)
+
+The ECU communicates asynchronously with the Android Control Panel strictly at **921,600 bps** using structured JSON telemetry:
+1. **`rt` (Real-Time Audio Frame, ~30 FPS)**: Carries 8/16/32/64-band KissFFT magnitude arrays, stereo VU values, and active input mode.
+2. **`hz1` (Diagnostic Frame, 1 FPS)**: Carries SMPS, Standby, Logic, and 5V rail voltages, heatsink temperatures (`heat_c`), relay states, sleep timers, and active error codes (`errors[]`).
+
+Every valid command sent from the controller (e.g. `{"type":"cmd","cmd":{"power":false}}`) generates an immediate hardware acoustic confirmation click (`buzzerClick()`).
+
+---
+
+## 4. Compilation & Flashing
+
+```bash
+# Build firmware binary:
+python3 tools/upload.py --build-only
+
+# Flash to ESP32 over Android Panel via High-Speed Jacktor API @ 921,600 bps:
+python3 tools/upload.py panel
+
+# Or flash directly via host USB serial port @ 921,600 bps:
+python3 tools/upload.py usb
+```

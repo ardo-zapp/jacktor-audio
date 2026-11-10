@@ -16,17 +16,37 @@ void handleAnalyzerJson(cJSON *obj) {
   const char *cmd = (cmdItem && cJSON_IsString(cmdItem)) ? cmdItem->valuestring : "get";
 
   if (strcmp(cmd, "set") == 0) {
+    bool changed = false;
     cJSON *modeItem = cJSON_GetObjectItem(obj, "mode");
-    if (modeItem && cJSON_IsString(modeItem)) analyzerSetMode(modeItem->valuestring);
+    if (modeItem && cJSON_IsString(modeItem)) {
+      if (strcmp(analyzerGetMode(), modeItem->valuestring) != 0) {
+        analyzerSetMode(modeItem->valuestring);
+        changed = true;
+      }
+    }
 
     cJSON *bandsItem = cJSON_GetObjectItem(obj, "bands");
-    if (bandsItem && cJSON_IsNumber(bandsItem)) analyzerSetBands(static_cast<uint8_t>(bandsItem->valuedouble));
+    if (bandsItem && cJSON_IsNumber(bandsItem)) {
+      uint8_t nb = static_cast<uint8_t>(bandsItem->valuedouble);
+      if (nb != analyzerGetBandsLen()) {
+        analyzerSetBands(nb);
+        changed = true;
+      }
+    }
 
     cJSON *updateItem = cJSON_GetObjectItem(obj, "update_ms");
-    if (updateItem && cJSON_IsNumber(updateItem)) analyzerSetUpdateMs(static_cast<uint16_t>(updateItem->valuedouble));
+    if (updateItem && cJSON_IsNumber(updateItem)) {
+      uint16_t nu = static_cast<uint16_t>(updateItem->valuedouble);
+      if (nu != analyzerGetUpdateMs()) {
+        analyzerSetUpdateMs(nu);
+        changed = true;
+      }
+    }
 
-    analyzerSaveToNvs();
-    sendAckOkStr("analyzer", "set", true);
+    if (changed) {
+      analyzerSaveToNvs();
+    }
+    sendAckOkStr("analyzer", "set", false);
     sendAnalyzerSnapshot("set");
     forceTel = true;
   } else if (strcmp(cmd, "set_params") == 0) {
@@ -54,7 +74,7 @@ void handleAnalyzerJson(cJSON *obj) {
       analyzerSetTestChannel(static_cast<uint8_t>(chItem->valuedouble));
     }
 
-    sendAckOkStr("analyzer", "set_params", true);
+    sendAckOkStr("analyzer", "set_params", false);
     sendAnalyzerSnapshot("set_params");
     forceTel = true;
   } else if (strcmp(cmd, "get") == 0) {
@@ -62,6 +82,8 @@ void handleAnalyzerJson(cJSON *obj) {
   } else if (strcmp(cmd, "calibrate") == 0) {
     analyzerCalibrateAdc();
     sendAckOkBool("analyzer_calibrate", true, true);
+    sendAnalyzerSnapshot("calibrated");
+    forceTel = true;
   } else if (strcmp(cmd, "reset_clip") == 0) {
     analyzerResetClippingCount();
     sendAckOkBool("analyzer_reset_clip", true, false);
