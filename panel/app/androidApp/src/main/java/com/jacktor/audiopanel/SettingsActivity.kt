@@ -430,7 +430,13 @@ fun SettingsScreen(
     }
 
     LaunchedEffect(Unit) {
-        refreshStatus()
+        while (isActive) {
+            val s = JacktorApiBridge.execute("status")
+            if (s != null) {
+                systemStatus = s
+            }
+            delay(3000L)
+        }
     }
 
     Scaffold(
@@ -605,7 +611,14 @@ private fun PanelAndSystemTab(
     val ssh = status?.optJSONObject("ssh")
 
     var rotation by remember(tweaks) { mutableIntStateOf(tweaks?.optInt("rotation", 1) ?: 1) }
-    var stayOn by remember(tweaks) { mutableIntStateOf(tweaks?.optInt("stayon", 1) ?: 1) }
+    val rawStayMode = tweaks?.optString("stay_on_mode", "").orEmpty()
+    val initialStayMode = when {
+        rawStayMode.isNotEmpty() -> rawStayMode
+        tweaks?.optInt("stayon", 1) == 1 -> "always"
+        tweaks?.optInt("stayon", 1) == 2 -> "auto"
+        else -> "normal"
+    }
+    var stayOnMode by remember(tweaks) { mutableStateOf(initialStayMode) }
     var lockscreenDisabled by remember(tweaks) { mutableIntStateOf(tweaks?.optInt("lockscreen_disabled", 1) ?: 1) }
     var autosuspend by remember(tweaks) { mutableIntStateOf(tweaks?.optInt("autosuspend", -1) ?: -1) }
 
@@ -618,7 +631,6 @@ private fun PanelAndSystemTab(
     // Launcher & Terminal Prefs
     var showBootTerminal by remember { mutableStateOf(prefs.getBoolean("show_boot_terminal", true)) }
     var terminalDelaySec by remember { mutableFloatStateOf(prefs.getInt("terminal_pass_delay_sec", 3).toFloat()) }
-    var standbySleepTimeoutSec by remember { mutableIntStateOf(prefs.getInt("standby_sleep_timeout_sec", 60)) }
 
     // 0. Language Selector (Bahasa Indonesia & English)
     val currentLang by LanguageController.currentLanguage
@@ -651,7 +663,7 @@ private fun PanelAndSystemTab(
     }
 
     // 1. Hardware Architecture & Kernel
-    SectionCard(title = "SISTEM PANEL & KERNEL") {
+    SectionCard(title = PanelStrings.current(currentLang).panelKernelTitle) {
         InfoRow("Model Perangkat", status?.optString("device_model", "Realme C15 (Bengal SM4250)") ?: "Realme C15")
         InfoRow("Versi Kernel", kernel?.optString("display", "Linux 4.19.152-perf+") ?: "Linux 4.19.152-perf+")
         InfoRow("Uptime Sistem", status?.optString("uptime_id", "19 jam 13 menit") ?: "-")
@@ -660,9 +672,9 @@ private fun PanelAndSystemTab(
     }
 
     // 2. Layar & Orientasi
-    SectionCard(title = "ORIENTASI & RESOLUSI LAYAR") {
+    SectionCard(title = PanelStrings.current(currentLang).orientationResolutionTitle) {
         Text(
-            text = "Rotasi Tampilan Panel:",
+            text = PanelStrings.current(currentLang).panelRotationLabel,
             color = IndustrialPrimary,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
@@ -698,7 +710,7 @@ private fun PanelAndSystemTab(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Preset Resolusi & Kepadatan Layar (DPI):",
+            text = PanelStrings.current(currentLang).resolutionDensityPresetLabel,
             color = IndustrialPrimary,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
@@ -756,38 +768,10 @@ private fun PanelAndSystemTab(
         }
     }
 
-    // 3. Daya Layar & Standby
-    SectionCard(title = "DAYA LAYAR & AUTO-STANDBY") {
-        SettingSwitchRow(
-            label = "Layar Terkunci Always-On 24/7 (stay_on_mode=always)",
-            checked = stayOn == 1,
-            onCheckedChange = { isStay ->
-                val v = if (isStay) 1 else 0
-                stayOn = v
-                scope.launch {
-                    JacktorApiBridge.execute("apply_tweak", mapOf("tweak" to "stayon", "val" to v.toString()))
-                    onRefresh()
-                }
-            }
-        )
-
-        SettingSwitchRow(
-            label = "Nonaktifkan Lock Screen Android (Instant Display)",
-            checked = lockscreenDisabled == 1,
-            onCheckedChange = { isDis ->
-                val v = if (isDis) 1 else 0
-                lockscreenDisabled = v
-                scope.launch {
-                    JacktorApiBridge.execute("apply_tweak", mapOf("tweak" to "lockscreen", "val" to v.toString()))
-                    onRefresh()
-                }
-            }
-        )
-
-        Spacer(modifier = Modifier.height(6.dp))
-
+    // 3. Daya Layar & Auto-Standby
+    SectionCard(title = PanelStrings.screenPowerTitle(currentLang)) {
         Text(
-            text = "Batas Waktu Tidur Layar Standby (Saat 24/7 Always-On Mati):",
+            text = PanelStrings.screenPowerModeLabel(currentLang),
             color = IndustrialPrimary,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
@@ -799,27 +783,56 @@ private fun PanelAndSystemTab(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            listOf(30 to "30d", 60 to "1 Menit", 120 to "2 Menit", 300 to "5 Menit").forEach { (sec, label) ->
+            listOf(
+                "always" to PanelStrings.screenModeAlways(currentLang),
+                "normal" to PanelStrings.screenModeNormal(currentLang),
+                "auto" to PanelStrings.screenModeAuto(currentLang)
+            ).forEach { (modeVal, label) ->
                 OptionChipButton(
                     text = label,
-                    selected = standbySleepTimeoutSec == sec,
+                    selected = stayOnMode == modeVal,
                     onClick = {
-                        standbySleepTimeoutSec = sec
-                        prefs.edit().putInt("standby_sleep_timeout_sec", sec).apply()
+                        stayOnMode = modeVal
                         scope.launch {
-                            JacktorApiBridge.runRoot("settings put system screen_off_timeout ${sec * 1000}")
+                            JacktorApiBridge.execute("apply_tweak", mapOf("tweak" to "stayon", "val" to modeVal))
+                            onRefresh()
                         }
                     },
                     modifier = Modifier.weight(1f)
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = PanelStrings.screenModeAutoDesc(currentLang),
+            color = Color(0xFF94A3B8),
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            lineHeight = 14.sp
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        SettingSwitchRow(
+            label = PanelStrings.lockscreenDisabledLabel(currentLang),
+            checked = lockscreenDisabled == 1,
+            onCheckedChange = { isDis ->
+                val v = if (isDis) 1 else 0
+                lockscreenDisabled = v
+                scope.launch {
+                    JacktorApiBridge.execute("apply_tweak", mapOf("tweak" to "lockscreen", "val" to v.toString()))
+                    onRefresh()
+                }
+            }
+        )
     }
 
     // 4. Baterai & Performa CPU
-    SectionCard(title = "DAYA BATERAI & PROFIL PERFORMA CPU") {
+    SectionCard(title = PanelStrings.current(currentLang).batteryCpuTitle) {
         SettingSwitchRow(
-            label = "24/7 Battery AC Bypass (Proteksi Baterai & Bypass Charger)",
+            label = PanelStrings.current(currentLang).batteryBypassLabel,
             checked = isBypass,
             onCheckedChange = { bypass ->
                 isBypass = bypass
@@ -831,7 +844,7 @@ private fun PanelAndSystemTab(
         )
 
         SettingSwitchRow(
-            label = "USB Autosuspend (Anti-Dropout Audio Buffer)",
+            label = PanelStrings.current(currentLang).usbAutosuspendLabel,
             checked = autosuspend == -1,
             onCheckedChange = { anti ->
                 val v = if (anti) "-1" else "2"
@@ -845,7 +858,7 @@ private fun PanelAndSystemTab(
         Spacer(modifier = Modifier.height(6.dp))
 
         Text(
-            text = "Profil Tuning CPU Qualcomm Bengal:",
+            text = PanelStrings.current(currentLang).cpuProfileLabel,
             color = IndustrialPrimary,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
@@ -879,7 +892,8 @@ private fun PanelAndSystemTab(
     }
 
     // 5. Layanan OpenSSH Daemon
-    SectionCard(title = "LAYANAN ADMINISTRASI OPENSSH (PORT 22)") {
+    // 5. OpenSSH Administration
+    SectionCard(title = PanelStrings.current(currentLang).sshAdminTitle) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -962,7 +976,7 @@ private fun PanelAndSystemTab(
     }
 
     // 6. Launcher & Terminal Boot
-    SectionCard(title = "DEFAULT HOME LAUNCHER & TERMINAL BOOT") {
+    SectionCard(title = PanelStrings.current(currentLang).launcherBootTitle) {
         Button(
             onClick = {
                 try {
@@ -1019,7 +1033,7 @@ private fun PanelAndSystemTab(
     var isUpdatingPwd by remember { mutableStateOf(false) }
     var isResettingRootPwd by remember { mutableStateOf(false) }
 
-    SectionCard(title = "KEAMANAN & KATA SANDI (ROOT & SSH)") {
+    SectionCard(title = PanelStrings.current(currentLang).securityPasswordTitle) {
         Text(
             text = "Kelola kata sandi terintegrasi untuk Web Dashboard, SSH, dan otorisasi tindakan sistem (Default: furry2026).",
             color = Color(0xFF94A3B8),

@@ -100,8 +100,11 @@ init_security_and_sepolicy() {
             "allow audioserver vendor_default_prop file { read open getattr map }" \
             "allow hal_audio_sysbta vendor_default_prop file { read open getattr map }" \
             "allow system_suspend sysfs dir { read open search getattr }" \
+            "allow system_suspend sysfs file { read open getattr }" \
             "allow system_suspend vendor_sysfs_battery_supply dir { read open search getattr }" \
+            "allow system_suspend vendor_sysfs_battery_supply file { read open getattr }" \
             "allow system_suspend sysfs_net dir { read open search getattr }" \
+            "allow system_suspend sysfs_net file { read open getattr }" \
             "allow zygote vendor_default_prop file { read open getattr map }" \
             "allow hal_graphics_composer_default graphics_config_prop file { read open getattr map }" \
             "allow hal_graphics_composer_default graphics_config_writable_prop file { read open getattr map }" \
@@ -186,8 +189,8 @@ remount_audio_files() {
         log "Active audio policy: Tertinggi (384kHz 32-bit Upsample)"
     fi
 
-    # Pastikan file vendor XML dan libalsautils termount sempurna
-    for target in /vendor/etc/audio_policy_configuration.xml /vendor/lib64/libalsautils.so /vendor/lib/libalsautils.so; do
+    # Pastikan file vendor XML, Wi-Fi config, dan libalsautils termount sempurna
+    for target in /vendor/etc/audio_policy_configuration.xml /vendor/etc/wifi/WCNSS_qcom_cfg.ini /vendor/lib64/libalsautils.so /vendor/lib/libalsautils.so; do
         source="${MODDIR}/system${target}"
         if [ -r "$source" ] && [ -r "$target" ]; then
             if ! cmp "$source" "$target" >/dev/null 2>&1; then
@@ -296,7 +299,17 @@ apply_anti_sleep_and_wakelock() {
     settings put global wifi_suspend_optimizations_enabled 0 2>/dev/null
     settings put global wifi_power_save 0 2>/dev/null
     settings put global wifi_stay_awake 2 2>/dev/null
+    settings put global wifi_wakeup_enabled 1 2>/dev/null
+    settings put global wifi_scan_always_enabled 1 2>/dev/null
     iw dev wlan0 set power_save off 2>/dev/null
+
+    # 4b. Network Policy Manager - Whitelist background network usage
+    cmd netpolicy set restrict-background false 2>/dev/null
+    cmd netpolicy add restrict-background-whitelist 0 2>/dev/null
+    cmd netpolicy add restrict-background-whitelist 1000 2>/dev/null
+    cmd netpolicy add restrict-background-whitelist 2000 2>/dev/null
+    PANEL_UID="$(pm list packages -U 2>/dev/null | grep 'package:com.jacktor.audiopanel ' | awk -F'uid:' '{print $2}' | tr -d ' \r\n')"
+    [ -n "$PANEL_UID" ] && cmd netpolicy add restrict-background-whitelist "$PANEL_UID" 2>/dev/null
 
     # 5. Disable Android 14 Cached Apps Freezer
     settings put global cached_apps_freezer_enabled 0 2>/dev/null
@@ -687,8 +700,8 @@ apply_saved_usb_mode
             LAST_APIDS="$CURR_APIDS"
         fi
 
-        # Remount Audio Policy & Libs if needed
-        for target in /vendor/etc/audio_policy_configuration.xml /vendor/lib64/libalsautils.so; do
+        # Remount Audio Policy, Wi-Fi Config & Libs if needed
+        for target in /vendor/etc/audio_policy_configuration.xml /vendor/etc/wifi/WCNSS_qcom_cfg.ini /vendor/lib64/libalsautils.so; do
             source="${MODDIR}/system${target}"
             if [ -r "$source" ] && [ -r "$target" ]; then
                 if ! cmp "$source" "$target" >/dev/null 2>&1; then
@@ -706,6 +719,17 @@ apply_saved_usb_mode
             cmd deviceidle disable >/dev/null 2>&1
         fi
         iw dev wlan0 set power_save off 2>/dev/null
+
+        # Wi-Fi Link Integrity, Auto-Reconnect & Router ARP Keepalive (24/7 Standby Access)
+        OPER_WLAN="$(cat /sys/class/net/wlan0/operstate 2>/dev/null)"
+        IP_WLAN="$(ip -4 addr show wlan0 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}')"
+        if [ "$OPER_WLAN" != "up" ] || [ -z "$IP_WLAN" ]; then
+            cmd wifi reconnect >/dev/null 2>&1
+        else
+            # Send periodic keepalive ping to default gateway (keeps Wi-Fi AP active & router ARP cache hot)
+            GW="$(ip route 2>/dev/null | grep default | awk '{print $3}' | head -n 1)"
+            [ -n "$GW" ] && ping -c 1 -W 1 "$GW" >/dev/null 2>&1
+        fi
 
         # Maintain WebUI HTTP Server
         if ! pgrep -f "busybox httpd -p 80 " >/dev/null 2>&1; then

@@ -3,6 +3,7 @@ package com.jacktor.audiopanel
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -108,13 +109,33 @@ class MainActivity : ComponentActivity() {
     }
 
     private val repository = AmplifierRepository()
-    private var screenWakeLock: PowerManager.WakeLock? = null
-    private var lastAppliedScreenLockState: Boolean? = null
+    private var partialWakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         repositoryInstance = repository
+
+        // 24/7 Background Network & CPU WakeLock to guarantee WebUI, SSH & API services when screen is dark
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            partialWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "JacktorAudioPanel:PartialWakeLock").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "JacktorAudioPanel:WifiLock").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            multicastLock = wm.createMulticastLock("JacktorAudioPanel:MulticastLock").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (_: Exception) {
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -126,6 +147,8 @@ class MainActivity : ComponentActivity() {
                     WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
         }
+
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // Handle back button - stay on home launcher dashboard
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -184,14 +207,6 @@ class MainActivity : ComponentActivity() {
                 var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
                 val configuredDelaySec = prefs.getInt("terminal_pass_delay_sec", 3).coerceIn(1, 15)
                 var passCountdownSec by remember { mutableIntStateOf(configuredDelaySec) }
-
-                // Lock screen ALWAYS ON when amplifier is ON, initializing, or keep_screen_on_standby is enabled;
-                // Restore normal sleep timeout (default 60,000 ms) when amplifier is OFF and keep_screen_on_standby is disabled.
-                val keepScreenOnStandby = prefs.getBoolean("keep_screen_on_standby", false)
-                val shouldKeepScreenOn = isPowerOn || setupState.isActive || keepScreenOnStandby
-                LaunchedEffect(shouldKeepScreenOn, keepScreenOnStandby) {
-                    applyScreenPowerPolicy(shouldKeepScreenOn)
-                }
 
                 // Auto-return from Black Terminal Fragment to Main Dashboard a few seconds after PASS (or FAIL)
                 LaunchedEffect(setupState.isActive, setupState.overallStatus) {
@@ -281,10 +296,8 @@ class MainActivity : ComponentActivity() {
                                             if (prefs.getBoolean("show_boot_terminal", true)) {
                                                 repository.startPowerOnTerminal("Power-On Command (pwr-on) Sent — Initializing...")
                                             }
-                                            applyScreenPowerPolicy(true)
                                         } else {
                                             repository.dismissSetupTerminal()
-                                            applyScreenPowerPolicy(prefs.getBoolean("keep_screen_on_standby", false))
                                         }
                                         connMgr.sendCommand(TelemetryParser.buildPowerCommand(targetOn))
                                     }
@@ -292,7 +305,6 @@ class MainActivity : ComponentActivity() {
                                         if (prefs.getBoolean("show_boot_terminal", true)) {
                                             repository.startPowerOnTerminal("Power-On Bypass Command (pwr-on --bypass) Sent — Initializing...")
                                         }
-                                        applyScreenPowerPolicy(true)
                                         connMgr.sendCommand(TelemetryParser.buildPowerCommand(true, bypass = true))
                                     }
                                     "setchannel" -> {
@@ -329,108 +341,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        Thread {
-            try {
-                val proc = Runtime.getRuntime().exec(
-                    arrayOf("su", "-c", "cat /data/adb/modules/jacktor-audio-framework/config/stay_on_mode 2>/dev/null")
-                )
-                val mode = proc.inputStream.bufferedReader().readText().trim().lowercase()
-                proc.waitFor()
-                if (mode.isNotEmpty()) {
-                    val isAlways = (mode == "always" || mode == "true" || mode == "1")
-                    getSharedPreferences("JacktorPanelPrefs", Context.MODE_PRIVATE)
-                        .edit()
-                        .putBoolean("keep_screen_on_standby", isAlways)
-                        .apply()
-                }
-            } catch (_: Exception) {
-            }
-            runOnUiThread {
-                val prefs = getSharedPreferences("JacktorPanelPrefs", Context.MODE_PRIVATE)
-                val keepStandby = prefs.getBoolean("keep_screen_on_standby", false)
-                val shouldKeep = repository.isPowerOn.value || repository.setupState.value.isActive || keepStandby
-                lastAppliedScreenLockState = null
-                applyScreenPowerPolicy(shouldKeep)
-            }
-        }.start()
-    }
-
-    private fun applyScreenPowerPolicy(keepScreenLockedOn: Boolean) {
-        val prefs = getSharedPreferences("JacktorPanelPrefs", Context.MODE_PRIVATE)
-        val autoWakeEnabled = prefs.getBoolean("auto_wake_lock_on_pwr", true)
-        val keepStandbyOn = prefs.getBoolean("keep_screen_on_standby", false)
-        val standbyTimeoutMs = (prefs.getInt("standby_sleep_timeout_sec", 60).coerceIn(15, 600)) * 1000
-        val effectiveKeepOn = keepStandbyOn || (keepScreenLockedOn && autoWakeEnabled)
-
-        if (lastAppliedScreenLockState == effectiveKeepOn) return
-        lastAppliedScreenLockState = effectiveKeepOn
-
-        if (effectiveKeepOn) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            try {
-                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                @Suppress("DEPRECATION")
-                val wl = pm.newWakeLock(
-                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
-                        PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                        PowerManager.ON_AFTER_RELEASE,
-                    "JacktorAudioPanel:PowerOnWakeLock"
-                )
-                wl.acquire(10_000L)
-                screenWakeLock = wl
-            } catch (_: Exception) {
-            }
-
-            Thread {
-                try {
-                    Runtime.getRuntime().exec(
-                        arrayOf(
-                            "su", "-c",
-                            "settings put system screen_off_timeout 2147483647 2>/dev/null; " +
-                                "settings put global stay_on_while_plugged_in 7 2>/dev/null; " +
-                                "svc power stayon true 2>/dev/null; " +
-                                "echo 'jacktor_services' > /sys/power/wake_lock 2>/dev/null; " +
-                                "cmd deviceidle disable 2>/dev/null; " +
-                                "iw dev wlan0 set power_save off 2>/dev/null; " +
-                                "input keyevent 224 2>/dev/null"
-                        )
-                    )
-                } catch (_: Exception) {
-                }
-            }.start()
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            try {
-                screenWakeLock?.let {
-                    if (it.isHeld) it.release()
-                }
-                screenWakeLock = null
-            } catch (_: Exception) {
-            }
-
-            Thread {
-                try {
-                    Runtime.getRuntime().exec(
-                        arrayOf(
-                            "su", "-c",
-                            "svc power stayon false 2>/dev/null; " +
-                                "settings put global stay_on_while_plugged_in 0 2>/dev/null; " +
-                                "settings put system screen_off_timeout $standbyTimeoutMs 2>/dev/null; " +
-                                "echo 'jacktor_services' > /sys/power/wake_lock 2>/dev/null; " +
-                                "cmd deviceidle disable 2>/dev/null; " +
-                                "iw dev wlan0 set power_save off 2>/dev/null"
-                        )
-                    )
-                } catch (_: Exception) {
-                }
-            }.start()
-        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         try {
-            screenWakeLock?.let { if (it.isHeld) it.release() }
+            partialWakeLock?.let { if (it.isHeld) it.release() }
+            wifiLock?.let { if (it.isHeld) it.release() }
+            multicastLock?.let { if (it.isHeld) it.release() }
         } catch (_: Exception) {
         }
         connectionManager?.disconnect()

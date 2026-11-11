@@ -1808,8 +1808,9 @@
                         <i class="fa-solid fa-sun"></i> <span data-i18n="setting_stayon">Screen Always-On (Stay Awake)</span>
                     </div>
                     <div class="btn-group" style="margin-top: 0;">
-                        <button class="btn btn-tweak" id="tw-stay-1" onclick="applyTweak('stayon', 'true')"><i class="fa-solid fa-bolt"></i> <span data-i18n="btn_always_on">Always On (24/7)</span></button>
-                        <button class="btn btn-tweak" id="tw-stay-0" onclick="applyTweak('stayon', 'false')"><i class="fa-solid fa-clock"></i> <span data-i18n="btn_std_timeout">Normal (1m)</span></button>
+                        <button class="btn btn-tweak" id="tw-stay-always" onclick="applyTweak('stayon', 'always')"><i class="fa-solid fa-bolt"></i> <span data-i18n="btn_always_on">Always On (24/7)</span></button>
+                        <button class="btn btn-tweak" id="tw-stay-normal" onclick="applyTweak('stayon', 'normal')"><i class="fa-solid fa-clock"></i> <span data-i18n="btn_std_timeout">Normal (1m)</span></button>
+                        <button class="btn btn-tweak" id="tw-stay-auto" onclick="applyTweak('stayon', 'auto')"><i class="fa-solid fa-wand-magic-sparkles"></i> <span data-i18n="btn_stayon_auto">Auto</span></button>
                     </div>
                 </div>
 

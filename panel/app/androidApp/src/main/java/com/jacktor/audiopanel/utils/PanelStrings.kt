@@ -1,9 +1,6 @@
 package com.jacktor.audiopanel.utils
 
 import android.content.Context
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.staticCompositionLocalOf
 
@@ -46,59 +43,128 @@ object LanguageController {
 val LocalAppLanguage = staticCompositionLocalOf { AppLanguage.INDONESIAN }
 
 /**
- * Universal Dual-Language Dictionary for Jacktor Panel UI
+ * Universal Dual-Language Dictionary Interface
+ */
+interface AppDictionary {
+    val tabAudioMedia: String
+    val tabSystemAmp: String
+    val channelStereo: String
+    val channelLeft: String
+    val channelRight: String
+    val channelMono: String
+    val channelModeTitle: String
+    val channelModeDesc: String
+    fun channelButtonText(mode: Int): String
+
+    val settingsTabPanel: String
+    val settingsTabAudio: String
+    val settingsTabAmp: String
+    val settingsTabAnalyzer: String
+    val settingsTabThermal: String
+
+    val nowPlaying: String
+    val audioStandby: String
+    val noTrackTitle: String
+    val noTrackArtist: String
+    val bassBoost: String
+    val sound3d: String
+    val pairing: String
+
+    val confirmDangerTitle: String
+    val enterPassword: String
+    val cancel: String
+    val confirm: String
+    val forgotPassword: String
+    val resetPasswordDefault: String
+
+    val appLanguageTitle: String
+    val selectLanguage: String
+
+    // Screen Power & Auto-Standby
+    val screenPowerTitle: String
+    val screenPowerModeLabel: String
+    val screenModeAlways: String
+    val screenModeNormal: String
+    val screenModeAuto: String
+    val screenModeAutoDesc: String
+    val lockscreenDisabledLabel: String
+
+    // Panel & System Settings
+    val panelKernelTitle: String
+    val orientationResolutionTitle: String
+    val panelRotationLabel: String
+    val resolutionDensityPresetLabel: String
+    val batteryCpuTitle: String
+    val batteryBypassLabel: String
+    val usbAutosuspendLabel: String
+    val cpuProfileLabel: String
+    val sshAdminTitle: String
+    val sshServiceLabel: String
+    val sshAutostartLabel: String
+    val launcherBootTitle: String
+    val showBootTerminalLabel: String
+    val securityPasswordTitle: String
+}
+
+/**
+ * Universal Dual-Language Gateway for Jacktor Panel UI
  */
 object PanelStrings {
+    fun current(lang: AppLanguage = LanguageController.currentLanguage.value): AppDictionary {
+        return if (lang == AppLanguage.INDONESIAN) StringsId else StringsEn
+    }
+
     fun get(id: String, en: String, lang: AppLanguage = LanguageController.currentLanguage.value): String {
         return if (lang == AppLanguage.INDONESIAN) id else en
     }
 
     // Tabs
-    fun tabAudioMedia(lang: AppLanguage = LanguageController.currentLanguage.value) = get("AUDIO & MEDIA", "AUDIO & MEDIA", lang)
-    fun tabSystemAmp(lang: AppLanguage = LanguageController.currentLanguage.value) = get("SISTEM & AMP", "SYSTEM & AMP", lang)
+    fun tabAudioMedia(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).tabAudioMedia
+    fun tabSystemAmp(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).tabSystemAmp
 
     // Channel Routing (R/L)
-    fun channelStereo(lang: AppLanguage = LanguageController.currentLanguage.value) = get("STEREO (L/R)", "STEREO (L/R)", lang)
-    fun channelLeft(lang: AppLanguage = LanguageController.currentLanguage.value) = get("KIRI (L-CH)", "LEFT (L-CH)", lang)
-    fun channelRight(lang: AppLanguage = LanguageController.currentLanguage.value) = get("KANAN (R-CH)", "RIGHT (R-CH)", lang)
-    fun channelMono(lang: AppLanguage = LanguageController.currentLanguage.value) = get("MONO (L+R)", "MONO (L+R)", lang)
-    fun channelModeTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Routing Kanal Audio (R/L)", "Audio Channel Routing (R/L)", lang)
-    fun channelModeDesc(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Perutean kanal audio stereo (Stereo, Kiri, Kanan, Mono downmix).", "Stereo channel routing configuration (Stereo, Left, Right, Mono downmix).", lang)
-
-    fun channelButtonText(mode: Int, lang: AppLanguage = LanguageController.currentLanguage.value): String {
-        return when (mode) {
-            1 -> get("CH: KIRI (L)", "CH: LEFT (L)", lang)
-            2 -> get("CH: KANAN (R)", "CH: RIGHT (R)", lang)
-            3 -> get("CH: MONO", "CH: MONO", lang)
-            else -> "CH: STEREO"
-        }
-    }
+    fun channelStereo(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).channelStereo
+    fun channelLeft(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).channelLeft
+    fun channelRight(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).channelRight
+    fun channelMono(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).channelMono
+    fun channelModeTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).channelModeTitle
+    fun channelModeDesc(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).channelModeDesc
+    fun channelButtonText(mode: Int, lang: AppLanguage = LanguageController.currentLanguage.value): String = current(lang).channelButtonText(mode)
 
     // Settings Tabs
-    fun settingsTabPanel(lang: AppLanguage = LanguageController.currentLanguage.value) = get("PANEL & SISTEM", "PANEL & SYSTEM", lang)
-    fun settingsTabAudio(lang: AppLanguage = LanguageController.currentLanguage.value) = get("AUDIO & DSP", "AUDIO & DSP", lang)
-    fun settingsTabAmp(lang: AppLanguage = LanguageController.currentLanguage.value) = get("AMPLIFIER & BT", "AMPLIFIER & BT", lang)
-    fun settingsTabAnalyzer(lang: AppLanguage = LanguageController.currentLanguage.value) = get("ANALYZER & ADC", "ANALYZER & ADC", lang)
-    fun settingsTabThermal(lang: AppLanguage = LanguageController.currentLanguage.value) = get("TERMAL & HW", "THERMAL & HW", lang)
+    fun settingsTabPanel(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).settingsTabPanel
+    fun settingsTabAudio(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).settingsTabAudio
+    fun settingsTabAmp(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).settingsTabAmp
+    fun settingsTabAnalyzer(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).settingsTabAnalyzer
+    fun settingsTabThermal(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).settingsTabThermal
 
     // Media & Playback Card
-    fun nowPlaying(lang: AppLanguage = LanguageController.currentLanguage.value) = get("MEMUTAR MUSIK", "NOW PLAYING", lang)
-    fun audioStandby(lang: AppLanguage = LanguageController.currentLanguage.value) = get("AUDIO STANDBY", "AUDIO STANDBY", lang)
-    fun noTrackTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Tidak Ada Musik Diputar", "No Music Playing", lang)
-    fun noTrackArtist(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Audio Engine Standby", "Audio Engine Standby", lang)
-    fun bassBoost(lang: AppLanguage = LanguageController.currentLanguage.value) = "BASS BOOST"
-    fun sound3d(lang: AppLanguage = LanguageController.currentLanguage.value) = "3D AUDIO"
-    fun pairing(lang: AppLanguage = LanguageController.currentLanguage.value) = get("PAIRING", "PAIRING", lang)
+    fun nowPlaying(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).nowPlaying
+    fun audioStandby(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).audioStandby
+    fun noTrackTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).noTrackTitle
+    fun noTrackArtist(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).noTrackArtist
+    fun bassBoost(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).bassBoost
+    fun sound3d(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).sound3d
+    fun pairing(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).pairing
 
     // Dialog & Dangerous Actions
-    fun confirmDangerTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Konfirmasi Tindakan Berbahaya", "Dangerous Action Confirmation", lang)
-    fun enterPassword(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Masukkan Password Sistem (root):", "Enter System Password (root):", lang)
-    fun cancel(lang: AppLanguage = LanguageController.currentLanguage.value) = get("BATAL", "CANCEL", lang)
-    fun confirm(lang: AppLanguage = LanguageController.currentLanguage.value) = get("KONFIRMASI", "CONFIRM", lang)
-    fun forgotPassword(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Lupa Password?", "Forgot Password?", lang)
-    fun resetPasswordDefault(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Reset ke Default (furry2026)", "Reset to Default (furry2026)", lang)
+    fun confirmDangerTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).confirmDangerTitle
+    fun enterPassword(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).enterPassword
+    fun cancel(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).cancel
+    fun confirm(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).confirm
+    fun forgotPassword(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).forgotPassword
+    fun resetPasswordDefault(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).resetPasswordDefault
 
     // Language Section in Settings
-    fun appLanguageTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = get("BAHASA APLIKASI (APP LANGUAGE)", "APP LANGUAGE (BAHASA APLIKASI)", lang)
-    fun selectLanguage(lang: AppLanguage = LanguageController.currentLanguage.value) = get("Pilih Bahasa Antarmuka Panel:", "Select Panel Interface Language:", lang)
+    fun appLanguageTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).appLanguageTitle
+    fun selectLanguage(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).selectLanguage
+
+    // Screen Power & Standby
+    fun screenPowerTitle(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).screenPowerTitle
+    fun screenPowerModeLabel(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).screenPowerModeLabel
+    fun screenModeAlways(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).screenModeAlways
+    fun screenModeNormal(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).screenModeNormal
+    fun screenModeAuto(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).screenModeAuto
+    fun screenModeAutoDesc(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).screenModeAutoDesc
+    fun lockscreenDisabledLabel(lang: AppLanguage = LanguageController.currentLanguage.value) = current(lang).lockscreenDisabledLabel
 }

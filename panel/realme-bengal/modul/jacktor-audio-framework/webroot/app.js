@@ -754,7 +754,14 @@ async function applyFixedRate(val) {
             } else if (tweak === 'density') {
                 label = isId ? `Density Layar: ${val} DPI` : `Display Density: ${val} DPI`;
             } else if (tweak === 'stayon') {
-                label = isId ? `Layar Tetap Menyala: ${val ? 'Aktif' : 'Nonaktif'}` : `Screen Stay-On: ${val ? 'Enabled' : 'Disabled'}`;
+                const sval = String(val).toLowerCase();
+                if (sval === 'always' || sval === 'true' || sval === '1') {
+                    label = isId ? 'Layar Selalu Menyala: Always On (24/7)' : 'Screen Stay-On: Always On (24/7)';
+                } else if (sval === 'auto' || sval === '2') {
+                    label = isId ? 'Layar Selalu Menyala: Auto (Amp Aktif)' : 'Screen Stay-On: Auto (Amp Active)';
+                } else {
+                    label = isId ? 'Layar Selalu Menyala: Normal (1 Menit)' : 'Screen Stay-On: Normal (1m Timeout)';
+                }
             } else if (tweak === 'lockscreen') {
                 label = isId ? `Kunci Layar: ${val ? 'Dinonaktifkan' : 'Diaktifkan'}` : `Lockscreen: ${val ? 'Disabled' : 'Enabled'}`;
             }
@@ -805,9 +812,12 @@ async function applyFixedRate(val) {
             document.getElementById('tw-den-custom')?.classList.toggle('active', isCustomDen);
 
             // Stayon
-            const isStay = tw.stayon === 1 || tw.stayon === true;
-            document.getElementById('tw-stay-1')?.classList.toggle('active', isStay);
-            document.getElementById('tw-stay-0')?.classList.toggle('active', !isStay);
+            const stayMode = (tw.stay_on_mode || (tw.stayon === 1 ? 'always' : (tw.stayon === 2 ? 'auto' : 'normal'))).toLowerCase();
+            document.getElementById('tw-stay-always')?.classList.toggle('active', stayMode === 'always');
+            document.getElementById('tw-stay-normal')?.classList.toggle('active', stayMode === 'normal');
+            document.getElementById('tw-stay-auto')?.classList.toggle('active', stayMode === 'auto');
+            document.getElementById('tw-stay-1')?.classList.toggle('active', stayMode === 'always');
+            document.getElementById('tw-stay-0')?.classList.toggle('active', stayMode === 'normal');
 
             // Lockscreen
             const isLockDis = tw.lockscreen_disabled === 1 || tw.lockscreen_disabled === true;

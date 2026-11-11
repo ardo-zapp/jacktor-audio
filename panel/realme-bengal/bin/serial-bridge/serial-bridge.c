@@ -366,22 +366,29 @@ static int create_pty_bridge(const char *link_path, int *out_slave_fd) {
     return master_fd;
 }
 
-static int is_standby_always_on_enabled(void) {
+#define STAY_ON_NORMAL 0
+#define STAY_ON_ALWAYS 1
+#define STAY_ON_AUTO   2
+
+static int get_stay_on_mode(void) {
     char buf[32];
     if (read_file_trim(CONF_DIR "/stay_on_mode", buf, sizeof(buf))) {
-        if (strcmp(buf, "1") == 0 || strcmp(buf, "true") == 0 || strcmp(buf, "always") == 0) {
-            return 1;
+        if (strcmp(buf, "always") == 0 || strcmp(buf, "1") == 0 || strcmp(buf, "true") == 0) {
+            return STAY_ON_ALWAYS;
         }
-        if (strcmp(buf, "0") == 0 || strcmp(buf, "false") == 0 || strcmp(buf, "normal") == 0) {
-            return 0;
+        if (strcmp(buf, "auto") == 0 || strcmp(buf, "2") == 0) {
+            return STAY_ON_AUTO;
+        }
+        if (strcmp(buf, "normal") == 0 || strcmp(buf, "0") == 0 || strcmp(buf, "false") == 0) {
+            return STAY_ON_NORMAL;
         }
     }
     if (read_file_trim(CONF_DIR "/stay_on_standby", buf, sizeof(buf))) {
-        if (strcmp(buf, "1") == 0 || strcmp(buf, "true") == 0 || strcmp(buf, "always") == 0) {
-            return 1;
+        if (strcmp(buf, "always") == 0 || strcmp(buf, "1") == 0 || strcmp(buf, "true") == 0) {
+            return STAY_ON_ALWAYS;
         }
     }
-    return 0;
+    return STAY_ON_AUTO;
 }
 
 static int extract_json_object(const char *src, const char *key, char *dest, size_t dest_size) {
@@ -468,18 +475,31 @@ static void handle_telemetry_line(const char *line, int *last_amp_pwr) {
 
     if (detected_pwr != -1 && detected_pwr != *last_amp_pwr) {
         *last_amp_pwr = detected_pwr;
+        int mode = get_stay_on_mode();
         if (detected_pwr == 1) {
-            if (fork() == 0) {
-                system("settings put system screen_off_timeout 2147483647 2>/dev/null; "
-                       "settings put global stay_on_while_plugged_in 7 2>/dev/null; "
-                       "svc power stayon true 2>/dev/null; "
-                       "input keyevent 224 2>/dev/null; "
-                       "(dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|topResumedActivity' | grep -q 'com.jacktor.audiopanel') || "
-                       "am start -n com.jacktor.audiopanel/.MainActivity --activity-single-top >/dev/null 2>&1");
-                _exit(0);
+            if (mode == STAY_ON_ALWAYS || mode == STAY_ON_AUTO) {
+                if (fork() == 0) {
+                    system("settings put system screen_off_timeout 2147483647 2>/dev/null; "
+                           "settings put global stay_on_while_plugged_in 7 2>/dev/null; "
+                           "svc power stayon true 2>/dev/null; "
+                           "input keyevent 224 2>/dev/null; "
+                           "(dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|topResumedActivity' | grep -q 'com.jacktor.audiopanel') || "
+                           "am start -n com.jacktor.audiopanel/.MainActivity --activity-single-top >/dev/null 2>&1");
+                    _exit(0);
+                }
+            } else {
+                if (fork() == 0) {
+                    system("svc power stayon false 2>/dev/null; "
+                           "settings put global stay_on_while_plugged_in 0 2>/dev/null; "
+                           "settings put system screen_off_timeout 60000 2>/dev/null; "
+                           "input keyevent 224 2>/dev/null; "
+                           "(dumpsys activity activities 2>/dev/null | grep -E 'mResumedActivity|topResumedActivity' | grep -q 'com.jacktor.audiopanel') || "
+                           "am start -n com.jacktor.audiopanel/.MainActivity --activity-single-top >/dev/null 2>&1");
+                    _exit(0);
+                }
             }
         } else {
-            if (is_standby_always_on_enabled()) {
+            if (mode == STAY_ON_ALWAYS) {
                 if (fork() == 0) {
                     system("settings put system screen_off_timeout 2147483647 2>/dev/null; "
                            "settings put global stay_on_while_plugged_in 7 2>/dev/null; "

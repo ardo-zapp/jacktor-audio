@@ -1502,8 +1502,16 @@ static void handle_action_status(void) {
     }
 
     read_file_trimmed(CONF_DIR "/stay_on_mode", stay_conf, sizeof(stay_conf));
-    if (strcmp(stay_conf, "always") == 0 || strcmp(stay_conf, "true") == 0 || strcmp(stay_conf, "1") == 0) {
+    if (stay_conf[0] == '\0') strcpy(stay_conf, "auto");
+    if (strcmp(stay_conf, "1") == 0 || strcmp(stay_conf, "true") == 0) strcpy(stay_conf, "always");
+    else if (strcmp(stay_conf, "0") == 0 || strcmp(stay_conf, "false") == 0) strcpy(stay_conf, "normal");
+
+    if (strcmp(stay_conf, "always") == 0) {
         tw_stay_on = 1;
+    } else if (strcmp(stay_conf, "auto") == 0) {
+        tw_stay_on = 2;
+    } else {
+        tw_stay_on = 0;
     }
     read_file_int("/sys/module/usbcore/parameters/autosuspend", &tw_autosuspend);
 
@@ -1624,6 +1632,7 @@ static void handle_action_status(void) {
     printf("    \"resolution\": \"%s\",\n", tw_res);
     printf("    \"density\": %lld,\n", tw_den);
     printf("    \"stayon\": %lld,\n", tw_stay_on);
+    printf("    \"stay_on_mode\": \"%s\",\n", stay_conf);
     printf("    \"lockscreen_disabled\": %lld,\n", tw_lock);
     printf("    \"autosuspend\": %lld\n", tw_autosuspend);
     printf("  },\n");
@@ -2717,16 +2726,62 @@ int main(int argc, char **argv) {
         }
 
         if (strcmp(tw, "stayon") == 0) {
-            int on = (strcmp(v, "true") == 0 || strcmp(v, "1") == 0 || strcmp(v, "always") == 0);
-            write_file_str(CONF_DIR "/stay_on_mode", on ? "always\n" : "normal\n");
-            if (on) {
-                int res = system("svc power stayon true >/dev/null 2>&1; settings put global stay_on_while_plugged_in 7 >/dev/null 2>&1; settings put system screen_off_timeout 2147483647 >/dev/null 2>&1");
-                (void)res;
+            char mode_str[32] = "normal";
+            if (strcmp(v, "always") == 0 || strcmp(v, "true") == 0 || strcmp(v, "1") == 0) {
+                strcpy(mode_str, "always");
+            } else if (strcmp(v, "auto") == 0 || strcmp(v, "2") == 0) {
+                strcpy(mode_str, "auto");
             } else {
-                int res = system("svc power stayon false >/dev/null 2>&1; settings put global stay_on_while_plugged_in 0 >/dev/null 2>&1; settings put system screen_off_timeout 60000 >/dev/null 2>&1");
+                strcpy(mode_str, "normal");
+            }
+            char out_str[48];
+            snprintf(out_str, sizeof(out_str), "%s\n", mode_str);
+            write_file_str(CONF_DIR "/stay_on_mode", out_str);
+
+            if (strcmp(mode_str, "always") == 0) {
+                int res = system("svc power stayon true >/dev/null 2>&1; "
+                                 "settings put global stay_on_while_plugged_in 7 >/dev/null 2>&1; "
+                                 "settings put system screen_off_timeout 2147483647 >/dev/null 2>&1; "
+                                 "input keyevent 224 >/dev/null 2>&1");
+                (void)res;
+            } else if (strcmp(mode_str, "auto") == 0) {
+                int is_amp_on = 0;
+                FILE *f = fopen("/data/adb/modules/jacktor-audio-framework/cache/telemetry.json", "r");
+                if (f) {
+                    char tbuf[4096];
+                    size_t nr = fread(tbuf, 1, sizeof(tbuf) - 1, f);
+                    fclose(f);
+                    if (nr > 0) {
+                        tbuf[nr] = '\0';
+                        if (strstr(tbuf, "\"pwr\":true") != NULL ||
+                            strstr(tbuf, "\"states\":{\"on\":true") != NULL ||
+                            strstr(tbuf, "\"changed\":\"power\",\"value\":true") != NULL) {
+                            is_amp_on = 1;
+                        }
+                    }
+                }
+                if (is_amp_on) {
+                    int res = system("svc power stayon true >/dev/null 2>&1; "
+                                     "settings put global stay_on_while_plugged_in 7 >/dev/null 2>&1; "
+                                     "settings put system screen_off_timeout 2147483647 >/dev/null 2>&1; "
+                                     "input keyevent 224 >/dev/null 2>&1");
+                    (void)res;
+                } else {
+                    int res = system("svc power stayon false >/dev/null 2>&1; "
+                                     "settings put global stay_on_while_plugged_in 0 >/dev/null 2>&1; "
+                                     "settings put system screen_off_timeout 60000 >/dev/null 2>&1");
+                    (void)res;
+                }
+            } else {
+                int res = system("svc power stayon false >/dev/null 2>&1; "
+                                 "settings put global stay_on_while_plugged_in 0 >/dev/null 2>&1; "
+                                 "settings put system screen_off_timeout 60000 >/dev/null 2>&1");
                 (void)res;
             }
-            printf("{\"success\":true,\"message\":\"Layar tetap menyala diatur ke %s\",\"state\":%s}\n", on ? "Aktif" : "Normal", on ? "true" : "false");
+            const char *label_msg = strcmp(mode_str, "always") == 0 ? "Selalu Menyala" :
+                                    (strcmp(mode_str, "auto") == 0 ? "Auto" : "Normal");
+            printf("{\"success\":true,\"message\":\"Layar tetap menyala diatur ke %s\",\"stay_on_mode\":\"%s\",\"state\":%s}\n",
+                   label_msg, mode_str, strcmp(mode_str, "always") == 0 ? "true" : "false");
             return 0;
         }
 

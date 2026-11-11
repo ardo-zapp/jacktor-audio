@@ -87,6 +87,7 @@
   "setting_stayon": "Screen Always-On (Stay Awake)",
   "btn_always_on": "Always On (24/7)",
   "btn_std_timeout": "Normal (1m)",
+  "btn_stayon_auto": "Auto (Amp Active)",
   "setting_lockscreen": "Lockscreen Security",
   "btn_lock_disabled": "Direct Boot (No Lock)",
   "btn_lock_enabled": "Enabled",
